@@ -13,6 +13,9 @@ dependencies {
     implementation(libs.kotlinx.coroutinesSwing)
 
     implementation(libs.compose.uiToolingPreview)
+
+    implementation(compose.material3)
+    implementation(compose.materialIconsExtended)
 }
 
 compose.desktop {

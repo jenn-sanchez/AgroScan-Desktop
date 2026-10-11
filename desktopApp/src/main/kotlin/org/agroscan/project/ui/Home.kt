@@ -1,5 +1,6 @@
 package org.agroscan.project.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -80,9 +82,13 @@ private fun Sidebar(selected: Int, onSelect: (Int) -> Unit) {
         Modifier.width(220.dp).fillMaxHeight().background(SidebarBg)
             .border(1.dp, Border).padding(12.dp)
     ) {
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 12.dp)) {
-            Text("AgroScan", color = Green, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("Enterprise Drone System", color = TextMuted, fontSize = 11.sp)
+        Row(Modifier.padding(horizontal = 8.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource("icon.png"), "Logo AgroScan", Modifier.size(40.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("AgroScan", color = Green, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Enterprise Drone System", color = TextMuted, fontSize = 11.sp)
+            }
         }
         Spacer(Modifier.height(12.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {

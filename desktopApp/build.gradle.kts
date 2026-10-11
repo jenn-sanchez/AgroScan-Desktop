@@ -26,6 +26,7 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "org.agroscan.project"
             packageVersion = "1.0.0"
+            windows.iconFile.set(project.file("icons/icon.ico"))
         }
     }
 }

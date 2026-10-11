@@ -76,8 +76,9 @@ private fun TelemetriaTopBar() {
                 Icon(it, null, Modifier.size(12.dp), tint = TextDark)
                 Spacer(Modifier.width(4.dp))
             }
-            Text("|  Connection: Stable", fontSize = 10.sp, color = TextMuted, maxLines = 1)
         }
+        Spacer(Modifier.width(8.dp))
+        PhoneStatusPill()
         Spacer(Modifier.width(12.dp))
         Box(Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF374151)), Alignment.Center) {
             Icon(Icons.Filled.Person, null, tint = Color.White)

@@ -1,5 +1,8 @@
 package org.agroscan.project.features.redlocal
 
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.security.SecureRandom
 import java.util.Base64
 
@@ -17,30 +20,57 @@ object LocalHotspot {
     @Volatile var isOn = false
         private set
 
+    private val _phoneConnected = MutableStateFlow(false)
+    /** true cuando al menos un dispositivo (el teléfono) está conectado a la red de la PC. */
+    val phoneConnected: StateFlow<Boolean> = _phoneConnected
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var poller: Job? = null
+
     init {
         // Si la app se cierra con la red encendida, la apagamos para no dejarla abierta.
         Runtime.getRuntime().addShutdownHook(Thread { if (isOn) runCatching { stop() } })
     }
 
     /** Bloqueante (~2-5 s): llamar fuera del hilo de UI. */
-    fun start(): Result<Unit> = run("start").onSuccess { isOn = true }
+    fun start(): Result<Unit> = run("start").map { }.onSuccess {
+        isOn = true
+        poller?.cancel()
+        // Cada consulta lanza PowerShell (~1 s), por eso se pregunta cada 5 s y solo con la red encendida.
+        poller = scope.launch {
+            while (isActive) {
+                _phoneConnected.value = run("count").getOrNull()?.toIntOrNull()?.let { it > 0 } ?: false
+                delay(5_000)
+            }
+        }
+    }
 
-    fun stop(): Result<Unit> = run("stop").onSuccess { isOn = false }
+    fun stop(): Result<Unit> = run("stop").map { }.onSuccess {
+        isOn = false
+        poller?.cancel()
+        _phoneConnected.value = false
+    }
 
-    private fun run(action: String): Result<Unit> = runCatching {
+    /** Devuelve lo que el script imprime después de "OK". */
+    private fun run(action: String): Result<String> = runCatching {
         val script = SCRIPT.replace("__ACTION__", action).replace("__SSID__", SSID).replace("__PASS__", password)
         val encoded = Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE))
         val proc = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
             .redirectErrorStream(true).start()
-        val out = proc.inputStream.bufferedReader().readText()
+        val out = proc.inputStream.bufferedReader(Charsets.UTF_8).readText()
         proc.waitFor()
         val result = out.lines().lastOrNull { it.startsWith("OK") || it.startsWith("ERR:") }
-        check(result == "OK") { result?.removePrefix("ERR:")?.trim() ?: out.trim().ifEmpty { "Sin respuesta de Windows" } }
+        check(result != null && result.startsWith("OK")) { result?.removePrefix("ERR:")?.trim() ?: out.trim().ifEmpty { "Sin respuesta de Windows" } }
+        result.removePrefix("OK").trim()
     }
 
     private val SCRIPT = """
         ${'$'}ErrorActionPreference = 'Stop'
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
+            if (-not (Get-NetAdapter -Physical | Where-Object { ${'$'}_.NdisPhysicalMedium -eq 9 })) {
+                throw 'Esta computadora no tiene tarjeta Wi-Fi (o está desactivada/sin driver). Se necesita Wi-Fi para crear la red local.'
+            }
             Add-Type -AssemblyName System.Runtime.WindowsRuntime
             ${'$'}ext = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { ${'$'}_.Name -eq 'AsTask' -and ${'$'}_.GetParameters().Count -eq 1 }
             ${'$'}opAsTask = ${'$'}ext | Where-Object { ${'$'}_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
@@ -55,6 +85,10 @@ object LocalHotspot {
             if (-not ${'$'}profile) { throw 'No hay ningún perfil de red guardado. Conéctate una vez a cualquier Wi-Fi para crearlo.' }
             ${'$'}tm = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::CreateFromConnectionProfile(${'$'}profile)
 
+            if ('__ACTION__' -eq 'count') {
+                "OK ${'$'}(${'$'}tm.ClientCount)"
+                return
+            }
             if ('__ACTION__' -eq 'start') {
                 ${'$'}cfg = New-Object Windows.Networking.NetworkOperators.NetworkOperatorTetheringAccessPointConfiguration
                 ${'$'}cfg.Ssid = '__SSID__'

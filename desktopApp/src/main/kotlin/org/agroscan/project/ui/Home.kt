@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.agroscan.project.features.redlocal.LocalHotspot
 
 internal val Green = Color(0xFF006C47)
 internal val Accent = Color(0xFF10B981)
@@ -63,6 +64,7 @@ fun Home() {
         Sidebar(selected) { selected = it }
         when (navItems[selected].label) {
             "Telemetría" -> TelemetriaUi()
+            "Red Local" -> RedLocalUi()
             else -> Column(Modifier.fillMaxSize()) {
                 TopBar()
                 Dashboard()
@@ -121,14 +123,7 @@ private fun TopBar() {
             "Resumen Operativo", Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
             color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis
         )
-        Row(
-            Modifier.clip(RoundedCornerShape(50)).background(SidebarBg).padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(6.dp).clip(CircleShape).background(Green))
-            Spacer(Modifier.width(6.dp))
-            Text("Connection: Stable", fontSize = 11.sp, color = TextMuted)
-        }
+        PhoneStatusPill()
         listOf(Icons.Filled.Wifi, Icons.Filled.BatteryChargingFull, Icons.Filled.LocationOn).forEach {
             Spacer(Modifier.width(16.dp))
             Icon(it, null, Modifier.size(20.dp), tint = TextDark)
@@ -137,6 +132,22 @@ private fun TopBar() {
         Box(Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF374151)), Alignment.Center) {
             Icon(Icons.Filled.Person, null, tint = Color.White)
         }
+    }
+}
+
+/** Estado del teléfono: conectado solo cuando se unió a la red local que crea esta PC. */
+@Composable
+internal fun PhoneStatusPill() {
+    val connected by LocalHotspot.phoneConnected.collectAsState()
+    val color = if (connected) Green else Color(0xFFDC2626)
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(if (connected) SelectedBg else Color(0xFFFEE2E2))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
+        Text(if (connected) "Teléfono conectado" else "Teléfono desconectado", fontSize = 11.sp, color = color, maxLines = 1)
     }
 }
 

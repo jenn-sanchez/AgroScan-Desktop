@@ -63,6 +63,7 @@ fun Home() {
         Sidebar(selected) { selected = it }
         when (navItems[selected].label) {
             "Telemetría" -> TelemetriaUi()
+            "Red Local" -> RedLocalUi(onBack = { selected = 0 })
             else -> Column(Modifier.fillMaxSize()) {
                 TopBar()
                 Dashboard()

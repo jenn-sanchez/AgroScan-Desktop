@@ -11,6 +11,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.agroscan.project.features.login.Auth
+import org.agroscan.project.features.telemetry.TelemetryData
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,22 +56,28 @@ fun TelemetriaUi() {
 
 @Composable
 private fun TelemetriaTopBar() {
+    val enCurso by produceState<String?>(null) {
+        val id = Auth.usuario.value?.id ?: return@produceState
+        value = withContext(Dispatchers.IO) { TelemetryData.misionEnCurso(id) }.getOrNull()
+    }
     Row(
         Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(Green))
+        Box(Modifier.size(8.dp).clip(CircleShape).background(if (enCurso != null) Green else TextMuted))
         Spacer(Modifier.width(8.dp))
         Text(
-            "Misión en Curso: Lote Norte-4", fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+            enCurso?.let { "Misión en Curso: $it" } ?: "Sin misión en curso", fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
             color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis
         )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            "Vuelo Automático", Modifier.clip(RoundedCornerShape(4.dp)).background(SelectedBg)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            fontSize = 10.sp, color = Green, maxLines = 1
-        )
+        if (enCurso != null) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Vuelo Automático", Modifier.clip(RoundedCornerShape(4.dp)).background(SelectedBg)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                fontSize = 10.sp, color = Green, maxLines = 1
+            )
+        }
         Spacer(Modifier.weight(1f))
         Row(
             Modifier.clip(RoundedCornerShape(50)).border(1.dp, Border, RoundedCornerShape(50))
@@ -80,9 +92,7 @@ private fun TelemetriaTopBar() {
         Spacer(Modifier.width(8.dp))
         PhoneStatusPill()
         Spacer(Modifier.width(12.dp))
-        Box(Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF374151)), Alignment.Center) {
-            Icon(Icons.Filled.Person, null, tint = Color.White)
-        }
+        UserAvatar()
     }
     HorizontalDivider(color = Border)
 }
@@ -95,16 +105,10 @@ private fun MapView(modifier: Modifier) {
             .background(Brush.linearGradient(listOf(Color(0xFFE8E6FA), Color(0xFFD9E3F5))))
             .border(1.dp, Border, RoundedCornerShape(10.dp))
     ) {
-        // Puntos de ruta en posiciones relativas para que escalen con el tamaño.
-        listOf(0.17f to 0.11f, 0.52f to 0.11f, 0.52f to 0.45f, 0.86f to 0.45f).forEach { (x, y) ->
-            Box(Modifier.offset(maxWidth * x, maxHeight * y).size(8.dp).clip(CircleShape).background(Color.Black))
+        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Filled.Image, null, Modifier.size(64.dp), tint = Purple)
+            Text("Sin posición del dron", fontSize = 11.sp, color = TextMuted)
         }
-        Box(
-            Modifier.offset(maxWidth * 0.82f, maxHeight * 0.2f).size(30.dp).clip(CircleShape).background(Green),
-            Alignment.Center
-        ) { Icon(Icons.Filled.Flight, null, Modifier.size(18.dp), tint = Color.White) }
-
-        Icon(Icons.Filled.Image, null, Modifier.align(Alignment.Center).size(64.dp), tint = Purple)
 
         Column(
             Modifier.padding(14.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF4B5563))
@@ -114,7 +118,7 @@ private fun MapView(modifier: Modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Timer, null, Modifier.size(14.dp), tint = Accent)
                 Spacer(Modifier.width(6.dp))
-                Text("14:22", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(NA, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
             }
         }
 
@@ -159,30 +163,26 @@ private fun LivePanel(modifier: Modifier, pinAbort: Boolean) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Stat(Modifier.weight(1f), Icons.Filled.Speed, "Velocidad", "12.4", "m/s")
-                Stat(Modifier.weight(1f), Icons.Filled.Height, "Altitud", "45.0", "m")
+                // shortcut: todo el panel en N/A hasta que el teléfono transmita la telemetría en vivo (UDP).
+                Stat(Modifier.weight(1f), Icons.Filled.Speed, "Velocidad", NA, "m/s")
+                Stat(Modifier.weight(1f), Icons.Filled.Height, "Altitud", NA, "m")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Stat(Modifier.weight(1f), Icons.Filled.BatteryFull, "Batería", "78", "%", progress = 0.78f)
-                Stat(Modifier.weight(1f), Icons.Filled.Route, "Recorrido", "1.2", "km")
+                Stat(Modifier.weight(1f), Icons.Filled.BatteryFull, "Batería", NA, "%", progress = 0f)
+                Stat(Modifier.weight(1f), Icons.Filled.Route, "Recorrido", NA, "km")
             }
             Spacer(Modifier.height(6.dp))
             PhotosCard()
             Spacer(Modifier.height(6.dp))
             Text("ESTADO DEL SISTEMA", fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold, color = TextDark)
             SystemRow(Icons.Filled.SatelliteAlt, "Señal GPS") {
-                Text(
-                    "RTK FIX (24)", Modifier.clip(RoundedCornerShape(4.dp)).background(SelectedBg)
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = Green
-                )
+                Text(NA, fontSize = 10.sp, color = TextMuted)
             }
             SystemRow(Icons.Filled.CameraAlt, "Cámara Multiespectral") {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(Accent))
-                Text(" Activa", fontSize = 10.sp, color = Green)
+                Text(NA, fontSize = 10.sp, color = TextMuted)
             }
             SystemRow(Icons.Filled.Air, "Viento en Altitud", divider = false) {
-                Text("14 km/h NO", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = TextDark)
+                Text(NA, fontSize = 10.sp, color = TextMuted)
             }
         }
 
@@ -235,11 +235,10 @@ private fun PhotosCard() = Card(Modifier.fillMaxWidth()) {
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text("Fotos Capturadas", fontSize = 10.sp, color = TextMuted)
-            Text("142", fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextDark)
+            Text(NA, fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextDark)
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text("↑ +3/s", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Green)
-            Text("Intervalo: 2s", fontSize = 9.sp, color = TextMuted)
+            Text("Intervalo: $NA", fontSize = 9.sp, color = TextMuted)
         }
     }
 }

@@ -16,6 +16,10 @@ dependencies {
 
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
+
+    implementation("org.postgresql:postgresql:42.7.8")
+
+    testImplementation(libs.kotlin.test)
 }
 
 compose.desktop {

@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +28,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.agroscan.project.features.login.Auth
+import org.agroscan.project.core.Database
+import org.agroscan.project.features.home.HomeData
+import java.io.File
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import org.agroscan.project.features.redlocal.LocalHotspot
 
 internal val Green = Color(0xFF006C47)
@@ -50,26 +60,35 @@ private val navItems = listOf(
     NavItem("Red Local", Icons.Filled.Lan),
 )
 
-private data class Mission(val fecha: String, val ubicacion: String, val tipo: String, val estado: String)
+/** Lo que se muestra cuando un dato no existe (base vacía, sin conexión o sin telemetría en vivo). */
+internal const val NA = "N/A"
 
-private val missions = listOf(
-    Mission("12 Oct 2023, 08:30", "Lote Norte - Sector A", "Multiespectral (NDVI)", "Completado"),
-    Mission("11 Oct 2023, 14:15", "Valle Sur - Cuadrante 2", "Topográfico (LIDAR)", "Completado"),
-    Mission("10 Oct 2023, 09:00", "Reserva Este", "Térmico", "Procesando..."),
-    Mission("09 Oct 2023, 16:45", "Lote Central - Ensayo", "Conteo de Plantas", "Cancelado (Clima)"),
-)
+private val fechaFormato = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm", Locale.forLanguageTag("es"))
+
+private fun estadoTexto(estado: String?) = when (estado) {
+    "BORRADOR" -> "Borrador"
+    "SINCRONIZADO" -> "Lista para volar"
+    "COMPLETADO" -> "Completada"
+    null -> NA
+    else -> estado
+}
 
 @Composable
 fun Home() {
+    val usuario by Auth.usuario.collectAsState()
     var selected by remember { mutableStateOf(0) }
     Row(Modifier.fillMaxSize().background(ContentBg)) {
         Sidebar(selected) { selected = it }
-        when (navItems[selected].label) {
-            "Telemetría" -> TelemetriaUi()
-            "Red Local" -> RedLocalUi()
-            else -> Column(Modifier.fillMaxSize()) {
-                TopBar()
-                Dashboard()
+        // Sin sesión, cualquier opción muestra el login: los datos de cada pantalla son del usuario que entró.
+        if (usuario == null) LoginUi()
+        else key(usuario?.id) {
+            when (navItems[selected].label) {
+                "Telemetría" -> TelemetriaUi()
+                "Red Local" -> RedLocalUi()
+                else -> Column(Modifier.fillMaxSize()) {
+                    TopBar()
+                    Dashboard()
+                }
             }
         }
     }
@@ -129,15 +148,15 @@ private fun TopBar() {
             "Resumen Operativo", Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
             color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis
         )
+        DbStatusPill()
+        Spacer(Modifier.width(8.dp))
         PhoneStatusPill()
         listOf(Icons.Filled.Wifi, Icons.Filled.BatteryChargingFull, Icons.Filled.LocationOn).forEach {
             Spacer(Modifier.width(16.dp))
             Icon(it, null, Modifier.size(20.dp), tint = TextDark)
         }
         Spacer(Modifier.width(16.dp))
-        Box(Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF374151)), Alignment.Center) {
-            Icon(Icons.Filled.Person, null, tint = Color.White)
-        }
+        UserAvatar()
     }
 }
 
@@ -157,8 +176,37 @@ internal fun PhoneStatusPill() {
     }
 }
 
+/** Estado de PostgreSQL: se prueba una vez al abrir la pantalla. */
+@Composable
+private fun DbStatusPill() {
+    val status by produceState<Result<String>?>(null) {
+        value = withContext(Dispatchers.IO) { Database.check() }
+        value?.onFailure { System.err.println("Base de datos: ${it.message}") }
+    }
+    val ok = status?.isSuccess == true
+    val color = when (status) { null -> TextMuted; else -> if (ok) Green else Color(0xFFDC2626) }
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(if (ok) SelectedBg else Color(0xFFFEE2E2))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            when { status == null -> "BD: verificando…"; ok -> "BD ${if (Database.isLocal) "local" else "en línea"}: ${status?.getOrNull()}"; else -> "BD sin conexión" },
+            fontSize = 11.sp, color = color, maxLines = 1
+        )
+    }
+}
+
 @Composable
 private fun Dashboard() {
+    val resumen by produceState<Result<HomeData.Resumen>?>(null) {
+        val id = Auth.usuario.value?.id ?: return@produceState
+        value = withContext(Dispatchers.IO) { HomeData.resumen(id) }
+        value?.onFailure { System.err.println("Base de datos: ${it.message}") }
+    }
+    val r = resumen?.getOrNull()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Pantallas angostas: las tarjetas se apilan en columna.
         val wide = maxWidth > 720.dp
@@ -167,15 +215,15 @@ private fun Dashboard() {
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Adaptive(wide) {
-                StatusCard(it)
+                StatusCard(it, resumen)
                 BatteryCard(it)
                 StorageCard(it)
             }
             Adaptive(wide) {
-                HectaresCard(it)
-                FlightsCard(it)
+                HectaresCard(it, r?.hectareas)
+                FlightsCard(it, r)
             }
-            MissionsTable(wide)
+            MissionsTable(wide, resumen)
         }
     }
 }
@@ -216,11 +264,18 @@ private fun Progress(value: Float) {
 }
 
 @Composable
-private fun StatusCard(m: Modifier) = Card(m) {
-    CardHeader("Estado del Sistema", Icons.Filled.CheckCircle, Green)
+private fun StatusCard(m: Modifier, resumen: Result<HomeData.Resumen>?) = Card(m) {
+    val ok = resumen?.isSuccess == true
+    CardHeader("Estado del Sistema", if (ok) Icons.Filled.CheckCircle else Icons.Filled.Error, if (ok) Green else Color(0xFFDC2626))
     Spacer(Modifier.height(8.dp))
-    Text("Óptimo", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
-    Text("Todos los enlaces de telemetría activos.", fontSize = 11.sp, color = TextMuted)
+    Text(
+        when { resumen == null -> "Verificando…"; ok -> "Operativo"; else -> "Sin base de datos" },
+        fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark
+    )
+    Text(
+        if (resumen?.isFailure == true) "No se pudo leer la base de datos." else "Base de datos disponible.",
+        fontSize = 11.sp, color = TextMuted
+    )
 }
 
 @Composable
@@ -228,35 +283,40 @@ private fun BatteryCard(m: Modifier) = Card(m) {
     CardHeader("Batería Flota Principal", Icons.Filled.BatteryFull)
     Spacer(Modifier.height(8.dp))
     Row(verticalAlignment = Alignment.Bottom) {
-        Text("85%", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
+        // shortcut: sin dato hasta que el teléfono transmita la telemetría en vivo (UDP), entonces usar la batería real.
+        Text(NA, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
         Spacer(Modifier.width(6.dp))
-        Text("Promedio", fontSize = 11.sp, color = TextMuted, modifier = Modifier.padding(bottom = 4.dp))
+        Text("Sin telemetría", fontSize = 11.sp, color = TextMuted, modifier = Modifier.padding(bottom = 4.dp))
     }
     Spacer(Modifier.height(8.dp))
-    Progress(0.85f)
+    Progress(0f)
 }
 
 @Composable
 private fun StorageCard(m: Modifier) = Card(m) {
+    // Disco donde está la carpeta del usuario (ahí se guardarán videos y ortomosaicos).
+    val disk = remember { File(System.getProperty("user.home")) }
+    val totalGb = disk.totalSpace / 1e9
+    val usedGb = totalGb - disk.usableSpace / 1e9
     CardHeader("Almacenamiento Local", Icons.Filled.Storage)
     Spacer(Modifier.height(8.dp))
     Row(verticalAlignment = Alignment.Bottom) {
-        Text("420", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
+        Text("%.0f".format(usedGb), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
         Text(" GB", fontSize = 16.sp, color = TextMuted, modifier = Modifier.weight(1f))
-        Text("de 1 TB", fontSize = 11.sp, color = TextMuted, modifier = Modifier.padding(bottom = 4.dp))
+        Text("de %.0f GB".format(totalGb), fontSize = 11.sp, color = TextMuted, modifier = Modifier.padding(bottom = 4.dp))
     }
     Spacer(Modifier.height(8.dp))
-    Progress(0.42f)
+    Progress(if (totalGb > 0) (usedGb / totalGb).toFloat() else 0f)
 }
 
 @Composable
-private fun HectaresCard(m: Modifier) = Card(
+private fun HectaresCard(m: Modifier, hectareas: Double?) = Card(
     m, Brush.linearGradient(listOf(Color(0xFFD1E7DD), Color(0xFFE8F3EE), Color(0xFFC9DFD4)))
 ) {
     Row(Modifier.fillMaxSize().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Hectáreas Escaneadas Totales", fontSize = 11.sp, color = TextMuted)
-            Text("1,248.5", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = TextDark)
+            Text(hectareas?.let { "%,.1f".format(Locale.US, it) } ?: NA, fontSize = 36.sp, fontWeight = FontWeight.Bold, color = TextDark)
         }
         Box(Modifier.size(44.dp).clip(CircleShape).background(Color.White).border(1.dp, Border, CircleShape), Alignment.Center) {
             Icon(Icons.Filled.Terrain, null, tint = Green)
@@ -265,19 +325,24 @@ private fun HectaresCard(m: Modifier) = Card(
 }
 
 @Composable
-private fun FlightsCard(m: Modifier) = Card(m) {
+private fun FlightsCard(m: Modifier, r: HomeData.Resumen?) = Card(m) {
+    // Variación contra el mes anterior; sin vuelos el mes anterior no hay base para comparar.
+    val cambio = r?.takeIf { it.vuelosMesAnterior > 0 }?.let { (it.vuelosMes - it.vuelosMesAnterior) * 100 / it.vuelosMesAnterior }
     Row(Modifier.fillMaxSize().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Vuelos Completados (Mes)", fontSize = 11.sp, color = TextMuted)
-            Text("34", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = TextDark)
+            Text(r?.vuelosMes?.toString() ?: NA, fontSize = 36.sp, fontWeight = FontWeight.Bold, color = TextDark)
         }
         Column(horizontalAlignment = Alignment.End) {
             Row(
                 Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xFFD1FAE5)).padding(horizontal = 6.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.AutoMirrored.Filled.TrendingUp, null, Modifier.size(12.dp), tint = Green)
-                Text(" +12%", fontSize = 10.sp, color = Green)
+                Icon(
+                    if ((cambio ?: 0) < 0) Icons.AutoMirrored.Filled.TrendingDown else Icons.AutoMirrored.Filled.TrendingUp,
+                    null, Modifier.size(12.dp), tint = Green
+                )
+                Text(cambio?.let { " %+d%%".format(it) } ?: " $NA", fontSize = 10.sp, color = Green)
             }
             Text("vs mes anterior", fontSize = 10.sp, color = TextMuted)
         }
@@ -285,8 +350,8 @@ private fun FlightsCard(m: Modifier) = Card(m) {
 }
 
 @Composable
-private fun MissionsTable(wide: Boolean) {
-    // En pantallas angostas se oculta la columna "Tipo de análisis".
+private fun MissionsTable(wide: Boolean, resumen: Result<HomeData.Resumen>?) {
+    // En pantallas angostas se oculta la columna "Captura".
     val weights = if (wide) listOf(1f, 1.2f, 1f, 0.8f) else listOf(1f, 1.2f, 0.9f)
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color.White)
@@ -300,14 +365,27 @@ private fun MissionsTable(wide: Boolean) {
             }
         }
         HorizontalDivider(color = Border)
-        val headers = listOf("Fecha", "Ubicación", "Tipo de Análisis", "Estado").let { if (wide) it else it - "Tipo de Análisis" }
+        val headers = listOf("Fecha", "Lote · Misión", "Captura", "Estado").let { if (wide) it else it - "Captura" }
         TableRow(weights) { i -> Text(headers[i].uppercase(), fontSize = 10.sp, letterSpacing = 1.sp, color = TextMuted) }
-        missions.forEach { mission ->
+        val misiones = resumen?.getOrNull()?.misiones.orEmpty()
+        if (misiones.isEmpty()) {
             HorizontalDivider(color = Border)
-            val cells = listOf(mission.fecha, mission.ubicacion, mission.tipo).let { if (wide) it else it - mission.tipo }
+            Text(
+                when { resumen == null -> "Cargando…"; resumen.isFailure -> "No se pudo leer la base de datos"; else -> "Sin misiones registradas" },
+                Modifier.fillMaxWidth().padding(16.dp), fontSize = 12.sp, color = TextMuted
+            )
+        }
+        misiones.forEach { mision ->
+            HorizontalDivider(color = Border)
+            val captura = mision.modoCaptura?.lowercase()?.replaceFirstChar { it.uppercase() } ?: NA
+            val cells = listOf(
+                mision.fecha.atZoneSameInstant(ZoneId.systemDefault()).format(fechaFormato),
+                "${mision.lote} · ${mision.mision}",
+                captura
+            ).let { if (wide) it else it.dropLast(1) }
             TableRow(weights) { i ->
                 if (i < cells.size) Text(cells[i], fontSize = 12.sp, color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                else StatusChip(mission.estado)
+                else StatusChip(estadoTexto(mision.estado))
             }
         }
     }
@@ -323,8 +401,8 @@ private fun TableRow(weights: List<Float>, cell: @Composable (Int) -> Unit) {
 @Composable
 private fun StatusChip(estado: String) {
     val (bg, fg) = when {
-        estado.startsWith("Completado") -> Accent to TextDark
-        estado.startsWith("Cancelado") -> Color(0xFFFEE2E2) to Color(0xFFB91C1C)
+        estado == "Completada" -> Accent to TextDark
+        estado == "Lista para volar" -> SelectedBg to Green
         else -> Color(0xFFE5E7F5) to TextMuted
     }
     Text(

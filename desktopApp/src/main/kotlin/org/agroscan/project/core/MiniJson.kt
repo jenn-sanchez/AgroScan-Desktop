@@ -1,12 +1,25 @@
-package org.agroscan.project.features.telemetry
+package org.agroscan.project.core
 
 /**
- * Lector mínimo de JSON para los paquetes del teléfono: devuelve Map, List, String, Double, Boolean o null. Se escribió aquí
- * para no añadir una librería solo para esto; lanza [IllegalArgumentException] con cualquier texto que no sea JSON válido.
+ * Lector mínimo de JSON para lo que manda el teléfono (telemetría y registros de vuelo): devuelve Map, List, String, Double,
+ * Boolean o null. Se escribió aquí para no añadir una librería solo para esto; lanza [IllegalArgumentException] con cualquier
+ * texto que no sea JSON válido. [quote] hace lo inverso para un texto.
  */
 internal object MiniJson {
 
-    private const val MAX_DEPTH = 8   // los paquetes son planos (a lo sumo una lista); más profundidad es basura
+    private const val MAX_DEPTH = 8   // lo que manda el teléfono tiene a lo sumo 2 niveles; más profundidad es basura
+
+    /** [text] como texto JSON entre comillas, con los caracteres especiales escapados. */
+    fun quote(text: String): String = buildString {
+        append('"')
+        for (c in text) when {
+            c == '"' -> append("\\\"")
+            c == '\\' -> append("\\\\")
+            c < ' ' -> append("\\u%04x".format(c.code))
+            else -> append(c)
+        }
+        append('"')
+    }
 
     fun parse(text: String): Any? {
         val r = Reader(text)

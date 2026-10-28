@@ -1,13 +1,13 @@
 package org.agroscan.project.features.telemetry
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.agroscan.project.core.MiniJson
+import org.agroscan.project.features.redlocal.LocalHotspot
 import kotlinx.coroutines.flow.StateFlow
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.io.IOException
 import kotlin.concurrent.thread
@@ -69,21 +69,15 @@ data class LiveLot(val perimetro: List<Pair<Double, Double>>, val recibidoMs: Lo
  * pantalla de Telemetría. UDP no tiene conexión: "hay señal" significa que llegó un paquete hace menos de [STALE_MS].
  *
  * Seguridad, por capas:
- * - El puerto se abre **solo en la IP de la zona móvil** ([HOTSPOT_IP]), no en todas las redes de la PC: desde el Wi-Fi de la casa,
+ * - El puerto se abre **solo en la IP de la zona móvil** ([LocalHotspot.PC_IP]), no en todas las redes de la PC: desde el Wi-Fi de la casa,
  *   la oficina o un café el puerto no existe. Mientras la Red Local está apagada no hay puerto abierto.
- * - El Firewall solo lo deja pasar desde esa red y para este programa ([TelemetryFirewall]).
- * - Además se descartan los paquetes cuyo origen no sea esa red ([isTrustedSource]).
+ * - El Firewall solo lo deja pasar desde esa red y para este programa ([org.agroscan.project.features.redlocal.LocalFirewall]).
+ * - Además se descartan los paquetes cuyo origen no sea esa red ([LocalHotspot.isLocalNetwork]).
  * - El protocolo no lleva órdenes: la PC solo lee y muestra. Lo peor que puede hacer un paquete falso es mostrar datos falsos.
  */
 object TelemetryReceiver {
 
     const val PORT = 8765
-
-    /** IP de esta PC en su zona móvil (la misma de LocalHotspot.PC_IP): el único lugar donde se escucha. */
-    const val HOTSPOT_IP = "192.168.137.1"
-
-    /** Prefijo de la red de la zona móvil de Windows. */
-    private const val HOTSPOT_PREFIX = "192.168.137."
 
     /** Cada cuánto se revisa si la Red Local se encendió o se apagó. */
     private const val CHECK_MS = 2_000L
@@ -118,7 +112,7 @@ object TelemetryReceiver {
      * Empieza a escuchar en un hilo propio. Llamarla de nuevo no hace nada. Espera a que exista la IP de la zona móvil (Red Local
      * encendida), abre el puerto solo en ella y lo suelta si la Red Local se apaga. [listenAddress] solo se cambia en las pruebas.
      */
-    fun start(listenAddress: () -> InetAddress? = ::hotspotAddress) {
+    fun start(listenAddress: () -> InetAddress? = LocalHotspot::address) {
         if (started) return
         started = true
         thread(isDaemon = true, name = "telemetria-udp") { listen(listenAddress) }
@@ -145,7 +139,7 @@ object TelemetryReceiver {
                             if (listenAddress() == null) break   // se apagó la Red Local: se suelta el puerto
                             continue
                         }
-                        if (!isTrustedSource(packet.address)) continue
+                        if (!LocalHotspot.isLocalNetwork(packet.address)) continue
                         // Un paquete que provoque un error inesperado se descarta: nunca debe apagar el receptor
                         runCatching { handle(String(packet.data, 0, packet.length, Charsets.UTF_8), System.currentTimeMillis()) }
                     }
@@ -158,11 +152,6 @@ object TelemetryReceiver {
         }
     }
 
-    /** La IP de la zona móvil si esta PC la tiene ahora (Red Local encendida); null si no. */
-    internal fun hotspotAddress(): InetAddress? = runCatching {
-        InetAddress.getByName(HOTSPOT_IP).takeIf { NetworkInterface.getByInetAddress(it) != null }
-    }.getOrNull()
-
     /** Procesa un paquete. Los que no son JSON válido o no traen lo esperado se ignoran. */
     internal fun handle(text: String, now: Long) {
         val json = runCatching { MiniJson.parse(text) }.getOrNull() as? Map<*, *> ?: return
@@ -172,13 +161,6 @@ object TelemetryReceiver {
             "lote" -> parseLote(json, now)?.let { _lote.value = it }
         }
     }
-
-    /**
-     * Solo se aceptan paquetes de la red de la zona móvil (192.168.137.x). El loopback solo puede llegar en las pruebas, que escuchan
-     * en 127.0.0.1; en la app el puerto está en [HOTSPOT_IP] y ahí no llega nada de 127.0.0.1.
-     */
-    internal fun isTrustedSource(address: InetAddress): Boolean =
-        address.isLoopbackAddress || (address is Inet4Address && address.hostAddress.startsWith(HOTSPOT_PREFIX))
 
     private fun accept(t: LiveTelemetry) {
         val prev = _live.value

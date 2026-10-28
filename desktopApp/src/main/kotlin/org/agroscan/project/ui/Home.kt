@@ -84,6 +84,7 @@ fun Home() {
         else key(usuario?.id) {
             when (navItems[selected].label) {
                 "Telemetría" -> TelemetriaUi()
+                "Procesamiento" -> ProcesamientoUi()
                 "Red Local" -> RedLocalUi()
                 else -> Column(Modifier.fillMaxSize()) {
                     TopBar()

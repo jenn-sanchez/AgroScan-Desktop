@@ -3,6 +3,9 @@ package org.agroscan.project.features.redlocal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.NetworkInterface
 import java.security.SecureRandom
 import java.util.Base64
 
@@ -19,6 +22,22 @@ object LocalHotspot {
 
     @Volatile var isOn = false
         private set
+
+    /**
+     * [PC_IP] si esta PC la tiene ahora (Red Local encendida, también si se encendió desde Windows); null si no. Los receptores
+     * de la red local abren sus puertos solo en esta IP.
+     */
+    fun address(): InetAddress? = runCatching {
+        InetAddress.getByName(PC_IP).takeIf { NetworkInterface.getByInetAddress(it) != null }
+    }.getOrNull()
+
+    /**
+     * true si [address] es un equipo de la red de la zona móvil (192.168.137.x): lo único que aceptan los receptores de la red local.
+     * El loopback solo puede llegar en las pruebas, que escuchan en 127.0.0.1; en la app los puertos están en [PC_IP] y ahí no
+     * llega nada de 127.0.0.1.
+     */
+    fun isLocalNetwork(address: InetAddress): Boolean =
+        address.isLoopbackAddress || (address is Inet4Address && address.hostAddress.startsWith(PC_IP.substringBeforeLast('.') + "."))
 
     private val _phoneConnected = MutableStateFlow(false)
     /** true cuando al menos un dispositivo (el teléfono) está conectado a la red de la PC. */

@@ -1,5 +1,6 @@
 package org.agroscan.project.features.telemetry
 
+import org.agroscan.project.core.MiniJson
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -132,23 +133,6 @@ class TelemetryReceiverTest {
         assertTrue(libre, "el receptor no soltó el puerto al apagarse la Red Local")
     }
 
-    @Test fun laReglaDelFirewallEsEstrechaYEscapaLaRuta() {
-        val script = TelemetryFirewall.ruleScript("""C:\Users\O'Brien\AgroScan\AgroScan.exe""")
-        assertTrue("-Protocol UDP" in script)
-        assertTrue("-LocalPort ${TelemetryReceiver.PORT}" in script)
-        assertTrue("-LocalAddress 192.168.137.1" in script)
-        assertTrue("-RemoteAddress 192.168.137.0/24" in script)
-        assertTrue("""-Program 'C:\Users\O''Brien\AgroScan\AgroScan.exe'""" in script)   // comilla escapada: no rompe el script
-        assertTrue("Remove-NetFirewallRule" in script)   // las reglas viejas de AgroScan se borran antes
-    }
-
-    @Test fun elNombreDeLaReglaDependeDelProgramaSinImportarMayusculas() {
-        val a = TelemetryFirewall.ruleName("""C:\Users\ASUS\AgroScan\AgroScan.exe""")
-        assertTrue(a.matches(Regex("AgroScan telemetria [0-9a-f]{8}")), a)
-        assertEquals(a, TelemetryFirewall.ruleName("""c:\users\asus\agroscan\agroscan.exe"""))   // Windows guarda la ruta en minúsculas
-        assertTrue(a != TelemetryFirewall.ruleName("""C:\Program Files\AgroScan\AgroScan.exe"""))  // otro lugar → otra regla
-    }
-
     @Test fun elPlanTraeSalidaAlturaModoYOrigen() {
         TelemetryReceiver.handle(
             """{"tipo":"plan","t_ms":1,"mision":"M","salida":2,"salidas":3,"altura_m":25,"modo":"video","home":[-0.3,-79.3],"ruta":[-0.1,-79.1]}""", 1
@@ -182,7 +166,7 @@ class TelemetryReceiverTest {
     }
 
     @Test fun soloSeConfiaEnLaZonaMovilYEnEstaPc() {
-        fun trusted(ip: String) = TelemetryReceiver.isTrustedSource(InetAddress.getByName(ip))
+        fun trusted(ip: String) = org.agroscan.project.features.redlocal.LocalHotspot.isLocalNetwork(InetAddress.getByName(ip))
         assertEquals(true, trusted("192.168.137.23"))   // el teléfono en la zona móvil
         assertEquals(true, trusted("127.0.0.1"))        // solo llega en las pruebas (la app escucha en 192.168.137.1)
         assertEquals(false, trusted("192.168.1.50"))    // otra red local

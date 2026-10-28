@@ -40,8 +40,9 @@ los deja para la pantalla de **Telemetría** (mapa con la ruta, la estela y el d
 - **El puerto solo existe en la red de la zona móvil:** la app lo abre en `192.168.137.1` y solo mientras la Red Local está encendida.
   Desde cualquier otra red (casa, oficina, café) no hay puerto que alcanzar.
 - **Firewall sin comandos:** la primera vez que se enciende la Red Local, Windows pregunta una sola vez *"¿Permitir que esta aplicación
-  haga cambios?"* → **Sí**, y la app crea la regla `AgroScan telemetria xxxxxxxx` (solo UDP 8765, solo esa red, solo AgroScan).
-  Ver [`features/telemetry/TelemetryFirewall.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/telemetry/TelemetryFirewall.kt).
+  haga cambios?"* → **Sí**, y la app crea dos reglas: `AgroScan telemetria xxxxxxxx` (UDP 8765) y `AgroScan registros xxxxxxxx`
+  (TCP 8766), cada una solo para esa red y solo para AgroScan.
+  Ver [`features/redlocal/LocalFirewall.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/redlocal/LocalFirewall.kt).
   Si el usuario responde No, la Red Local avisa; apagarla y encenderla vuelve a preguntar. Conviene desactivar el ahorro de energía de la zona móvil.
 - Solo se aceptan paquetes de la red de la zona móvil (`192.168.137.x`) y el protocolo no lleva órdenes: la PC solo lee y muestra.
   Detalle de seguridad en `docs/PROTOCOLO_PC.md` del proyecto del dron.
@@ -49,14 +50,40 @@ los deja para la pantalla de **Telemetría** (mapa con la ruta, la estela y el d
 - Formato de los paquetes y cómo probar sin el teléfono: `docs/PROTOCOLO_PC.md` del proyecto del dron (la app Android).
 - Sin mapa satelital todavía (el mapa dibuja ruta y estela sobre fondo liso, sin internet) y el botón "ABORTAR (RTL)" sigue sin función: no hay canal PC → dron.
 
+### Registros de vuelo y videos (para el procesamiento)
+
+Cada salida de una misión necesita en la PC tres cosas, que llegan por caminos distintos y se juntan en una carpeta:
+
+```
+Documentos\AgroScan\vuelos\
+  2026-10-27_Finca-Sanchez_Sector-1_a1b2c3d4\     ← un vuelo (fecha, lote, misión, inicio de su UUID); vuelo.json
+    salida-1\
+      registro.csv     ← del teléfono, por Wi-Fi: posición cada ~200 ms
+      eventos.jsonl    ← del teléfono, por Wi-Fi: las marcas (segundo del video + posición) y demás eventos
+      salida.json      ← datos de la salida (incluye cuándo empezó y terminó de grabar)
+      video\           ← de la microSD: los MP4 de esa salida
+```
+
+- **Registro y marcas — llegan solos.** Al terminar cada salida el teléfono los envía por HTTP (TCP 8766, solo en la Red Local) si está
+  conectado; lo que se voló sin la PC cerca se envía con **Enviar vuelos pendientes** en la app del teléfono. La PC los recibe en
+  [`features/flightlog/FlightLogServer.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/flightlog/FlightLogServer.kt)
+  y los guarda **una sola vez** (un reintento o un envío falso no los pisa).
+- **Video — se importa de la microSD.** En **Procesamiento → Importar desde la microSD** se elige la tarjeta; cada video se **copia**
+  (la tarjeta se reutiliza) a la salida en que se grabó, por la hora del archivo y la que guardó el teléfono. Los videos de vuelos
+  manuales se ignoran. Supone que el teléfono y la PC están en la misma zona horaria.
+- **Carpeta:** `Documentos\AgroScan` por defecto; se cambia en **Procesamiento → Carpeta de datos** (p. ej. a un disco más grande).
+  Cambiarla no mueve lo ya guardado. Ver [`core/DataFolder.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/core/DataFolder.kt).
+- Lo que se haga después con esos archivos (extraer cuadros, ortomosaico) es de otro módulo: lee esta carpeta.
+- Formato de los envíos: sección "Registros de vuelo" de `docs/PROTOCOLO_PC.md` del proyecto del dron.
+
 ### Estructura de la app de escritorio
 
 `desktopApp/src/main/kotlin/org/agroscan/project/`:
 
 | Carpeta | Contiene |
 |---|---|
-| `core/` | Solo infraestructura compartida: la conexión a la base (`Database.kt`). Cambiar de base no toca las consultas |
-| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad (`login`, `home`, `telemetry`, `redlocal`…) |
+| `core/` | Solo infraestructura compartida: la conexión a la base (`Database.kt`; cambiar de base no toca las consultas), la carpeta de datos (`DataFolder.kt`) y el lector de JSON (`MiniJson.kt`) |
+| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad (`login`, `home`, `telemetry`, `flightlog`, `redlocal`…) |
 | `ui/` | Solo diseño (Compose): llama a `features`, nunca a SQL directamente |
 
 ### Running the apps

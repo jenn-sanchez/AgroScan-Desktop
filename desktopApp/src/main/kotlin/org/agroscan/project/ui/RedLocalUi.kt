@@ -26,8 +26,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.agroscan.project.features.redlocal.LocalFirewall
 import org.agroscan.project.features.redlocal.LocalHotspot
-import org.agroscan.project.features.telemetry.TelemetryFirewall
+
 
 private val DangerText = Color(0xFFDC2626)
 
@@ -116,8 +117,8 @@ private fun HotspotCard() {
                     scope.launch {
                         var firewall: Result<Unit>? = null
                         val result = withContext(Dispatchers.IO) {
-                            // Al encender, la regla del Firewall para la telemetría (Windows pregunta solo si falta)
-                            if (on) LocalHotspot.stop() else LocalHotspot.start().onSuccess { firewall = TelemetryFirewall.ensure() }
+                            // Al encender, las reglas del Firewall para lo que manda el teléfono (Windows pregunta solo si faltan)
+                            if (on) LocalHotspot.stop() else LocalHotspot.start().onSuccess { firewall = LocalFirewall.ensure() }
                         }
                         result.onSuccess { on = LocalHotspot.isOn }.onFailure { error = "No se pudo cambiar la red: ${it.message}" }
                         firewall?.onFailure { error = it.message }

@@ -4,6 +4,7 @@ package org.agroscan.project
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.unit.dp
+import org.agroscan.project.features.telemetry.TelemetryReceiver
 import org.agroscan.project.ui.Home
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -12,6 +13,8 @@ import java.awt.Dimension
 import javax.imageio.ImageIO
 
 fun main() = application {
+    // Escucha la telemetría que manda el teléfono (UDP) desde que abre la app, esté o no abierta la pantalla de Telemetría
+    LaunchedEffect(Unit) { TelemetryReceiver.start() }
     Window(
         onCloseRequest = ::exitApplication,
         title = "AgroScan",

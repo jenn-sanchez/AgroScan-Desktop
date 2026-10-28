@@ -30,6 +30,25 @@ La app lee y guarda en PostgreSQL. Para configurarla en una PC nueva:
 
 Detalles en [`features/login/Auth.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/login/Auth.kt).
 
+### Telemetría en vivo (desde el teléfono)
+
+La app del dron manda por **UDP, puerto 8765**, la posición, batería, velocidad y estado de la misión (cada 0,5 s) y el nombre y la ruta de la misión (cada 5 s).
+[`features/telemetry/TelemetryReceiver.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/telemetry/TelemetryReceiver.kt) los recibe desde que abre la app y
+los deja para la pantalla de **Telemetría** (mapa con la ruta, la estela y el dron; tarjetas de velocidad, altitud, batería, recorrido, fotos y GPS) y la tarjeta de batería de **Inicio**.
+
+- Hay señal si llegó un paquete hace menos de 3 s; si no, la pantalla muestra "Sin señal · último dato hace N s" y la última posición en rojo.
+- **El puerto solo existe en la red de la zona móvil:** la app lo abre en `192.168.137.1` y solo mientras la Red Local está encendida.
+  Desde cualquier otra red (casa, oficina, café) no hay puerto que alcanzar.
+- **Firewall sin comandos:** la primera vez que se enciende la Red Local, Windows pregunta una sola vez *"¿Permitir que esta aplicación
+  haga cambios?"* → **Sí**, y la app crea la regla `AgroScan telemetria xxxxxxxx` (solo UDP 8765, solo esa red, solo AgroScan).
+  Ver [`features/telemetry/TelemetryFirewall.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/telemetry/TelemetryFirewall.kt).
+  Si el usuario responde No, la Red Local avisa; apagarla y encenderla vuelve a preguntar. Conviene desactivar el ahorro de energía de la zona móvil.
+- Solo se aceptan paquetes de la red de la zona móvil (`192.168.137.x`) y el protocolo no lleva órdenes: la PC solo lee y muestra.
+  Detalle de seguridad en `docs/PROTOCOLO_PC.md` del proyecto del dron.
+- Antes de despegar (al iniciar la salida) el teléfono manda también el contorno del lote, el origen, el número de salida, la altura y el modo de captura: el mapa los dibuja y la barra superior muestra "Salida 2 de 3 · 25 m · Video".
+- Formato de los paquetes y cómo probar sin el teléfono: `docs/PROTOCOLO_PC.md` del proyecto del dron (la app Android).
+- Sin mapa satelital todavía (el mapa dibuja ruta y estela sobre fondo liso, sin internet) y el botón "ABORTAR (RTL)" sigue sin función: no hay canal PC → dron.
+
 ### Estructura de la app de escritorio
 
 `desktopApp/src/main/kotlin/org/agroscan/project/`:

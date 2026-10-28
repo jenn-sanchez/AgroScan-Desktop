@@ -282,14 +282,15 @@ private fun StatusCard(m: Modifier, resumen: Result<HomeData.Resumen>?) = Card(m
 private fun BatteryCard(m: Modifier) = Card(m) {
     CardHeader("Batería Flota Principal", Icons.Filled.BatteryFull)
     Spacer(Modifier.height(8.dp))
+    // Batería del dron que está transmitiendo ahora; sin señal reciente del teléfono, N/A
+    val live = rememberLiveView().fresh?.takeIf { it.dron }
     Row(verticalAlignment = Alignment.Bottom) {
-        // shortcut: sin dato hasta que el teléfono transmita la telemetría en vivo (UDP), entonces usar la batería real.
-        Text(NA, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
+        Text(live?.let { "${it.bat}%" } ?: NA, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextDark)
         Spacer(Modifier.width(6.dp))
-        Text("Sin telemetría", fontSize = 11.sp, color = TextMuted, modifier = Modifier.padding(bottom = 4.dp))
+        Text(if (live != null) "En vivo" else "Sin telemetría", fontSize = 11.sp, color = TextMuted, modifier = Modifier.padding(bottom = 4.dp))
     }
     Spacer(Modifier.height(8.dp))
-    Progress(0f)
+    Progress(((live?.bat ?: 0) / 100f).coerceIn(0f, 1f))
 }
 
 @Composable

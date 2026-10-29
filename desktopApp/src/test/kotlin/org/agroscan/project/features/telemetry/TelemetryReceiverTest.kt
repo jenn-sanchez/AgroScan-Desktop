@@ -133,6 +133,28 @@ class TelemetryReceiverTest {
         assertTrue(libre, "el receptor no soltó el puerto al apagarse la Red Local")
     }
 
+    @Test fun elCursoLlegaSoloSiElTelefonoLoManda() {
+        TelemetryReceiver.handle(tel(1_000), 1)
+        assertNull(TelemetryReceiver.live.value?.curso)   // quieto o teléfono sin actualizar: la flecha usa la nariz
+        TelemetryReceiver.handle(tel(2_000).replace("}", ""","curso":132}"""), 2)
+        assertEquals(132.0, TelemetryReceiver.live.value?.curso)
+    }
+
+    @Test fun traeLaGrabacionYLosCuadros() {
+        TelemetryReceiver.handle(tel(1_000).replace("}", ""","t_rec_s":125,"cuadros":42}"""), 1)
+        assertEquals(125L, TelemetryReceiver.live.value?.tRecS)
+        assertEquals(42, TelemetryReceiver.live.value?.cuadros)
+        TelemetryReceiver.handle(tel(2_000), 2)   // un teléfono sin actualizar no los manda: quedan en 0
+        assertEquals(0L, TelemetryReceiver.live.value?.tRecS)
+    }
+
+    @Test fun laEtapaDePreparacionLlegaSoloSiElTelefonoLaManda() {
+        TelemetryReceiver.handle(tel(1_000, fase = "IDLE", volando = false), 1)
+        assertNull(TelemetryReceiver.live.value?.etapa)
+        TelemetryReceiver.handle(tel(2_000, fase = "IDLE", volando = false).replace("}", ""","etapa":"planificacion"}"""), 2)
+        assertEquals("planificacion", TelemetryReceiver.live.value?.etapa)
+    }
+
     @Test fun elPlanTraeSalidaAlturaModoYOrigen() {
         TelemetryReceiver.handle(
             """{"tipo":"plan","t_ms":1,"mision":"M","salida":2,"salidas":3,"altura_m":25,"modo":"video","home":[-0.3,-79.3],"ruta":[-0.1,-79.1]}""", 1

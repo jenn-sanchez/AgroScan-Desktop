@@ -3,6 +3,7 @@ package org.agroscan.project.features.redlocal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.agroscan.project.core.EventLog
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
@@ -54,20 +55,28 @@ object LocalHotspot {
     /** Bloqueante (~2-5 s): llamar fuera del hilo de UI. */
     fun start(): Result<Unit> = run("start").map { }.onSuccess {
         isOn = true
+        EventLog.log("red", "Red Local encendida (Wi-Fi $SSID, ahorro de energía de la zona móvil desactivado)")
         poller?.cancel()
         // Cada consulta lanza PowerShell (~1 s), por eso se pregunta cada 5 s y solo con la red encendida.
         poller = scope.launch {
+            var antes = -1
             while (isActive) {
-                _phoneConnected.value = run("count").getOrNull()?.toIntOrNull()?.let { it > 0 } ?: false
+                val n = run("count").getOrNull()?.toIntOrNull()
+                _phoneConnected.value = (n ?: 0) > 0
+                if (n != null && n != antes) {
+                    EventLog.log("red", if (n > 0) "Equipos conectados a la Red Local: $n" else "No hay ningún equipo conectado a la Red Local")
+                    antes = n
+                }
                 delay(5_000)
             }
         }
-    }
+    }.onFailure { EventLog.log("red", "ERROR al encender la Red Local: ${it.message}") }
 
     fun stop(): Result<Unit> = run("stop").map { }.onSuccess {
         isOn = false
         poller?.cancel()
         _phoneConnected.value = false
+        EventLog.log("red", "Red Local apagada desde la app")
     }
 
     /** Devuelve lo que el script imprime después de "OK". */
@@ -113,6 +122,9 @@ object LocalHotspot {
                 ${'$'}cfg.Ssid = '__SSID__'
                 ${'$'}cfg.Passphrase = '__PASS__'
                 ${'$'}actAsTask.Invoke(${'$'}null, @(${'$'}tm.ConfigureAccessPointAsync(${'$'}cfg))).Wait(-1) | Out-Null
+                # Sin esto Windows apaga la zona móvil si cree que no hay nadie conectado (corta al teléfono en pleno vuelo).
+                # No pide permisos; en un Windows viejo sin esta función se sigue igual.
+                try { [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::DisableNoConnectionsTimeout() } catch { }
                 ${'$'}op = ${'$'}tm.StartTetheringAsync()
             } else {
                 ${'$'}op = ${'$'}tm.StopTetheringAsync()

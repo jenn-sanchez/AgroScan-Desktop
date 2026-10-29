@@ -1,6 +1,7 @@
 package org.agroscan.project.features.flightlog
 
 import org.agroscan.project.core.MiniJson
+import org.agroscan.project.features.camera.CameraFeed
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
@@ -125,7 +126,7 @@ class FlightLogTest {
     // ---- FlightLogServer (HTTP de verdad)
 
     @Test fun recibePorHttpYSoloDevuelveLoQueFalta() {
-        FlightLogServer.start({ InetAddress.getLoopbackAddress() }, { FlightLogStore(root) })
+        FlightLogServer.start({ InetAddress.getLoopbackAddress() }, { FlightLogStore(root) }, { File(root, "logs") })
         val base = "http://127.0.0.1:${FlightLogServer.PORT}"
         fun request(method: String, path: String, json: String? = null): Pair<Int, String> {
             val c = URL(base + path).openConnection() as HttpURLConnection
@@ -150,5 +151,35 @@ class FlightLogTest {
         assertEquals(400, request("POST", "/salidas/$salida2", "no es json").first)
         assertEquals(404, request("GET", "/otra-cosa").first)
         assertEquals(2, FlightLogStore.marcas(FlightLogStore(root).salidas().single().eventos))
+
+        // Vista previa de la cámara en el mismo servidor: solo se pide (y se guarda) con la pantalla de Telemetría abierta
+        fun postJpeg(bytes: ByteArray): Pair<Int, String> {
+            val c = URL("$base/camara").openConnection() as HttpURLConnection
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.outputStream.use { it.write(bytes) }
+            val code = c.responseCode
+            return code to ((if (code < 400) c.inputStream else c.errorStream)?.use { String(it.readAllBytes()) } ?: "")
+        }
+        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 1, 2, 3)
+        CameraFeed.stopWatching()
+        assertEquals(200 to """{"seguir":false}""", request("GET", "/camara"))
+        assertEquals(200 to """{"seguir":false}""", postJpeg(jpeg))
+        assertNull(CameraFeed.frame.value)                          // nadie mira: no se guarda
+        CameraFeed.startWatching()
+        assertEquals(200 to """{"seguir":true}""", postJpeg(jpeg))
+        assertTrue(CameraFeed.frame.value!!.jpeg.contentEquals(jpeg))
+        assertEquals(400, postJpeg("no es una imagen".toByteArray()).first)
+        CameraFeed.stopWatching()
+
+        // Registro del enlace del teléfono: se guarda con su nombre; cualquier otro nombre (rutas, otros archivos) se rechaza
+        assertEquals(200, request("POST", "/logs/enlace-pc-2026-10-28.log", "08:00:00 [enlace] conectado\n").first)
+        assertEquals("08:00:00 [enlace] conectado\n", File(root, "logs/telefono/enlace-pc-2026-10-28.log").readText())
+        assertEquals(200, request("POST", "/logs/enlace-pc-2026-10-28.log", "más líneas\n").first)   // el mismo día se reemplaza
+        assertEquals("más líneas\n", File(root, "logs/telefono/enlace-pc-2026-10-28.log").readText())
+        listOf("..%2F..%2Fx.log", "enlace-pc-2026-10-28.exe", "otro.log", "enlace-pc-2026-10-28.log.bat").forEach {
+            assertEquals(400, request("POST", "/logs/$it", "x").first, it)
+        }
+        assertEquals(setOf("enlace-pc-2026-10-28.log"), File(root, "logs/telefono").list()!!.toSet())
     }
 }

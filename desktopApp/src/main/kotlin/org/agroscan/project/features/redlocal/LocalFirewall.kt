@@ -2,6 +2,7 @@ package org.agroscan.project.features.redlocal
 
 import org.agroscan.project.features.flightlog.FlightLogServer
 import org.agroscan.project.features.telemetry.TelemetryReceiver
+import org.agroscan.project.core.EventLog
 import java.security.MessageDigest
 import java.util.Base64
 
@@ -9,7 +10,7 @@ import java.util.Base64
  * Reglas del Firewall de Windows para lo que el teléfono manda por la Red Local, lo más estrechas posible: cada una abre un solo
  * puerto, solo en la IP de la zona móvil, solo desde equipos de esa red y solo para este programa.
  * - `AgroScan telemetria …`: UDP [TelemetryReceiver.PORT] (telemetría en vivo).
- * - `AgroScan registros …`: TCP [FlightLogServer.PORT] (registros de vuelo y marcas del video).
+ * - `AgroScan registros …`: TCP [FlightLogServer.PORT] (registros de vuelo con las marcas del video, y vista previa de la cámara).
  *
  * Las crea la app al encender la Red Local. Cambiar el Firewall exige permisos de administrador, así que Windows muestra **una sola**
  * confirmación ("¿Permitir que esta aplicación haga cambios?") para las dos; nunca se cambia en silencio. Si ya existen no se vuelve
@@ -46,6 +47,7 @@ object LocalFirewall {
     /** Crea (o rehace) las reglas si falta alguna. Windows pide confirmación; si el usuario dice que no, devuelve un error. Bloqueante. */
     fun ensure(): Result<Unit> = runCatching {
         if (exists()) return@runCatching
+        EventLog.log("red", "Faltan reglas del Firewall: se pide permiso a Windows")
         val prog = program ?: error("No se pudo identificar el programa de AgroScan para el Firewall")
         // Solo el script interno corre como administrador; la ventana de Windows (UAC) es la única interacción
         val proc = ProcessBuilder(
@@ -60,7 +62,8 @@ object LocalFirewall {
         check(exists()) {
             "Sin permiso en el Firewall: el teléfono no podrá enviar datos a la PC. Apaga y enciende la Red Local para volver a intentarlo."
         }
-    }
+        EventLog.log("red", "Reglas del Firewall creadas")
+    }.onFailure { EventLog.log("red", "ERROR del Firewall: ${it.message}") }
 
     /** Nombre de una regla para [program]: el prefijo y una huella de su ruta (Windows no distingue mayúsculas en rutas). */
     internal fun ruleName(prefix: String, program: String): String {

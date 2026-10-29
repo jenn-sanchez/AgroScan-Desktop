@@ -1,8 +1,10 @@
 package org.agroscan.project.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -12,9 +14,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -34,7 +38,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import org.agroscan.project.features.camera.CameraFeed
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -80,6 +88,11 @@ internal fun rememberLiveView(): LiveView {
 @Composable
 fun TelemetriaUi() {
     val view = rememberLiveView()
+    // Mientras esta pantalla está abierta la PC le pide al teléfono la vista previa de la cámara; al salir deja de pedirla
+    DisposableEffect(Unit) {
+        CameraFeed.startWatching()
+        onDispose { CameraFeed.stopWatching() }
+    }
     Column(Modifier.fillMaxSize()) {
         TelemetriaTopBar(view)
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -156,6 +169,25 @@ private fun formatClock(totalS: Long) = "%02d:%02d".format(totalS / 60, totalS %
  */
 @Composable
 private fun MapView(modifier: Modifier, view: LiveView) {
+    val camara = rememberCamara(view)
+    var grande by remember { mutableStateOf(false) }
+    // Al terminar la misión (sin imágenes) la cámara vuelve a su tamaño pequeño para la próxima
+    LaunchedEffect(camara == null) { if (camara == null) grande = false }
+    if (grande && camara != null) {
+        // Cámara en la mitad izquierda y el mapa en la otra: el mapa se encuadra en su mitad, así el dron no queda tapado
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            CameraView(camara, grande = true, Modifier.weight(1f).fillMaxHeight()) { grande = false }
+            MapArea(Modifier.weight(1f).fillMaxHeight(), view, cameraPip = null)
+        }
+    } else {
+        MapArea(modifier, view, cameraPip = camara?.let { c ->
+            { m -> CameraView(c, grande = false, m.width(300.dp).aspectRatio(16f / 9f)) { grande = true } }
+        })
+    }
+}
+
+@Composable
+private fun MapArea(modifier: Modifier, view: LiveView, cameraPip: (@Composable (Modifier) -> Unit)?) {
     val plan by TelemetryReceiver.plan.collectAsState()
     val lote by TelemetryReceiver.lote.collectAsState()
     val trail by TelemetryReceiver.trail.collectAsState()
@@ -175,7 +207,8 @@ private fun MapView(modifier: Modifier, view: LiveView) {
                 Text("Sin posición del dron", fontSize = 11.sp, color = TextMuted)
             }
         } else {
-            LiveMap(lot, route, trail, drone, home, last?.rumbo, signal = view.fresh != null, Modifier.fillMaxSize())
+            // La flecha apunta hacia donde se mueve el dron (sobre la ruta); quieto, hacia la nariz. Con rumbo fijo la nariz no sigue la ruta
+            LiveMap(lot, route, trail, drone, home, last?.curso ?: last?.rumbo, signal = view.fresh != null, Modifier.fillMaxSize())
             Row(
                 Modifier.align(Alignment.BottomStart).padding(14.dp).clip(RoundedCornerShape(6.dp))
                     .background(Color.White.copy(alpha = 0.85f)).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -184,7 +217,7 @@ private fun MapView(modifier: Modifier, view: LiveView) {
                 Text("■ Lote", fontSize = 10.sp, color = Green)
                 Text("┄ Ruta", fontSize = 10.sp, color = TextMuted)
                 Text("━ Recorrido", fontSize = 10.sp, color = Accent)
-                Text("● Origen", fontSize = 10.sp, color = HomeBlue)
+                Text("H Origen", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = HomeBlue)
             }
         }
 
@@ -199,6 +232,9 @@ private fun MapView(modifier: Modifier, view: LiveView) {
                 Text(view.fresh?.takeIf { it.dron }?.let { formatClock(it.tVueloS) } ?: NA, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
             }
         }
+
+        PreparingBanner(view, Modifier.align(Alignment.TopCenter).padding(top = 14.dp))
+        cameraPip?.invoke(Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 44.dp))
 
         if (drone != null || route.isNotEmpty() || lot.isNotEmpty()) {
             Text(
@@ -216,6 +252,79 @@ private fun MapView(modifier: Modifier, view: LiveView) {
                 HorizontalDivider(Modifier.width(30.dp), color = Border)
                 IconButton(onClick = {}, Modifier.size(30.dp)) { Icon(Icons.Filled.Remove, "Alejar", Modifier.size(16.dp)) }
             }
+        }
+    }
+}
+
+/**
+ * Aviso mientras el operador prepara la misión en el teléfono: la ruta y el lote solo llegan al iniciar la salida, así que sin esto
+ * el mapa cambiaría de golpe. Desaparece al llegar la ruta (o si el teléfono deja de transmitir o sale de esos pasos).
+ */
+@Composable
+private fun PreparingBanner(view: LiveView, modifier: Modifier) {
+    val live = view.fresh?.takeUnless { it.enMision } ?: return
+    if (TelemetryReceiver.currentPlan(view.now) != null) return
+    val texto = when (live.etapa) {
+        "perimetro" -> "Marcando el perímetro del lote en el teléfono…"
+        "planificacion" -> "Generando la ruta en el teléfono…"
+        "verificacion" -> "Ruta generada en el teléfono · verificando antes de despegar…"
+        else -> return
+    }
+    Row(
+        modifier.clip(RoundedCornerShape(50)).background(Color.White).border(1.dp, Border, RoundedCornerShape(50))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(Modifier.size(14.dp), color = Green, strokeWidth = 2.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(texto, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextDark)
+    }
+}
+
+/** Lo que se muestra de la cámara: [image] null = todavía no llegó ninguna imagen. */
+private class Camara(val image: ImageBitmap?)
+
+/**
+ * La vista previa de la cámara del dron, o null si no hay nada que mostrar. Solo durante la misión: el teléfono la manda mientras
+ * vuela una salida. Es para mirar; el video bueno queda en la microSD.
+ */
+@Composable
+private fun rememberCamara(view: LiveView): Camara? {
+    val frame by CameraFeed.frame.collectAsState()
+    val fresh = frame?.takeIf { view.now - it.recibidoMs <= CameraFeed.STALE_MS }
+    val image = remember(fresh) {
+        fresh?.let { runCatching { org.jetbrains.skia.Image.makeFromEncoded(it.jpeg).toComposeImageBitmap() }.getOrNull() }
+    }
+    return if (fresh == null && view.fresh?.enMision != true) null else Camara(image)
+}
+
+/** La cámara pequeña sobre el mapa o grande en media pantalla (como en el teléfono). Un clic o el botón cambia de tamaño. */
+@Composable
+private fun CameraView(camara: Camara, grande: Boolean, modifier: Modifier, onToggle: () -> Unit) {
+    Box(
+        modifier.clip(RoundedCornerShape(if (grande) 10.dp else 8.dp)).background(Color.Black)
+            .border(2.dp, if (grande) Border else Color.White, RoundedCornerShape(if (grande) 10.dp else 8.dp))
+            .clickable(onClickLabel = if (grande) "Achicar la cámara" else "Agrandar la cámara", onClick = onToggle),
+        Alignment.Center
+    ) {
+        val image = camara.image
+        if (image != null) Image(image, "Cámara del dron", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        else Text("Esperando la cámara del dron…", fontSize = 11.sp, color = Color.White)
+        Text(
+            if (image != null) "● EN VIVO" else "CÁMARA",
+            Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.55f))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (image != null) Color(0xFFF87171) else Color.White
+        )
+        IconButton(
+            onClick = onToggle,
+            Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp).clip(RoundedCornerShape(6.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+        ) {
+            Icon(
+                if (grande) Icons.Filled.CloseFullscreen else Icons.Filled.OpenInFull,
+                if (grande) "Achicar la cámara" else "Agrandar la cámara", Modifier.size(16.dp), tint = Color.White
+            )
         }
     }
 }
@@ -271,20 +380,31 @@ private fun LiveMap(
         route.forEach { drawCircle(Color(0xFF6B7280), 4f, at(it)) }
         line(trail, Accent, 4f)
         home?.let {
-            drawCircle(Color.White, 10f, at(it))
-            drawCircle(HomeBlue, 7f, at(it))
+            // Origen como en DJI: círculo con una H (dibujada con líneas: no hace falta medir texto)
+            val c = at(it)
+            drawCircle(Color.White, 14f, c)
+            drawCircle(HomeBlue, 12f, c)
+            val w = 4.5f
+            val h = 6f
+            drawLine(Color.White, Offset(c.x - w, c.y - h), Offset(c.x - w, c.y + h), 2.5f)
+            drawLine(Color.White, Offset(c.x + w, c.y - h), Offset(c.x + w, c.y + h), 2.5f)
+            drawLine(Color.White, Offset(c.x - w, c.y), Offset(c.x + w, c.y), 2.5f)
         }
 
         drone?.let { d ->
             val c = at(d)
             val color = if (signal) Green else Danger     // en rojo si dejó de llegar la señal: es la última posición conocida
-            drawCircle(Color.White, 11f, c)
-            drawCircle(color, 8f, c)
-            rumbo?.let {
-                rotate(it.toFloat(), pivot = c) {
-                    drawPath(Path().apply {
-                        moveTo(c.x, c.y - 24f); lineTo(c.x - 8f, c.y - 10f); lineTo(c.x + 8f, c.y - 10f); close()
-                    }, color)
+            if (rumbo == null) {
+                drawCircle(Color.White, 11f, c)
+                drawCircle(color, 8f, c)
+            } else {
+                // Flecha centrada en la posición (como en el mapa del teléfono), no un punto con la flecha por delante
+                rotate(rumbo.toFloat(), pivot = c) {
+                    val arrow = Path().apply {
+                        moveTo(c.x, c.y - 14f); lineTo(c.x + 10f, c.y + 10f); lineTo(c.x, c.y + 4f); lineTo(c.x - 10f, c.y + 10f); close()
+                    }
+                    drawPath(arrow, Color.White, style = Stroke(5f))
+                    drawPath(arrow, color)
                 }
             }
         }
@@ -321,6 +441,15 @@ private fun LivePanel(modifier: Modifier, pinAbort: Boolean, view: LiveView) {
                 else -> "Esperando datos del teléfono" to TextMuted
             }
             Text(estado, fontSize = 10.sp, color = color)
+            // Qué parte de los paquetes del teléfono llega (últimos 30 s): baja si hay distancia o interferencia
+            val senal by TelemetryReceiver.senal.collectAsState()
+            senal?.takeIf { view.fresh != null }?.let { pct ->
+                Text(
+                    "Señal Wi-Fi con el teléfono: $pct % de los datos llega",
+                    fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                    color = when { pct >= 95 -> Green; pct >= 80 -> Amber; else -> Danger }
+                )
+            }
             error?.let { Text(it, fontSize = 10.sp, color = Danger) }
         }
         HorizontalDivider(color = Border)
@@ -342,7 +471,7 @@ private fun LivePanel(modifier: Modifier, pinAbort: Boolean, view: LiveView) {
                 Stat(Modifier.weight(1f), Icons.Filled.Route, "Recorrido", live?.let { "%.2f".format(Locale.US, it.distM / 1000) } ?: NA, "km")
             }
             Spacer(Modifier.height(6.dp))
-            PhotosCard(live)
+            CaptureCard(live, fotoMode = TelemetryReceiver.currentPlan(view.now)?.modo == "foto")
             Spacer(Modifier.height(6.dp))
             Text("ESTADO DEL SISTEMA", fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold, color = TextDark)
             SystemRow(Icons.Filled.SatelliteAlt, "Señal GPS") {
@@ -399,21 +528,44 @@ private fun Stat(modifier: Modifier, icon: ImageVector, label: String, value: St
     }
 }
 
+/**
+ * Lo mismo que la tarjeta de la pantalla de misión del teléfono: waypoint y, en video, si graba, cuánto lleva y los cuadros
+ * que salen de lo recorrido; en fotos, las tomadas. El modo sale del plan de la salida (sin plan se asume video, como el teléfono).
+ */
 @Composable
-private fun PhotosCard(live: LiveTelemetry?) = Card(Modifier.fillMaxWidth()) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(30.dp).clip(CircleShape).background(Color(0xFFDBEAFE)), Alignment.Center) {
-            Icon(Icons.Filled.PhotoCamera, null, Modifier.size(16.dp), tint = Color(0xFF2563EB))
+private fun CaptureCard(live: LiveTelemetry?, fotoMode: Boolean) = Card(Modifier.fillMaxWidth()) {
+    Text("WAYPOINT", fontSize = 9.sp, letterSpacing = 1.sp, color = TextMuted)
+    Row(verticalAlignment = Alignment.Bottom) {
+        val total = live?.wpTotal?.takeIf { it > 0 }
+        Text(
+            total?.let { "${(live.wp + 1).coerceAtMost(it)}" } ?: NA,
+            fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextDark
+        )
+        total?.let { Text(" / $it", fontSize = 12.sp, color = TextMuted, modifier = Modifier.padding(bottom = 3.dp)) }
+    }
+    HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Border)
+    if (fotoMode) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.PhotoCamera, null, Modifier.size(16.dp), tint = Green)
+            Spacer(Modifier.width(6.dp))
+            Text(live?.fotos?.toString() ?: NA, fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Green)
         }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text("Fotos Capturadas", fontSize = 10.sp, color = TextMuted)
-            Text(live?.fotos?.toString() ?: NA, fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TextDark)
+        Text("FOTOS TOMADAS", fontSize = 9.sp, letterSpacing = 1.sp, color = TextMuted)
+    } else {
+        val grabando = live?.grabando == true
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Videocam, null, Modifier.size(16.dp), tint = if (grabando) Danger else TextMuted)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                when {
+                    live == null -> "Video · $NA"
+                    grabando -> "GRABANDO  ${formatClock(live.tRecS)}"
+                    else -> "Video en espera"
+                },
+                fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (grabando) Danger else TextMuted
+            )
         }
-        Column(horizontalAlignment = Alignment.End) {
-            // En una misión de video las fotos son 0: lo que importa es que esté grabando
-            Text(if (live?.grabando == true) "Grabando video" else "Intervalo: $NA", fontSize = 9.sp, color = if (live?.grabando == true) Danger else TextMuted)
-        }
+        Text("CUADROS PREVISTOS ≈ ${live?.cuadros ?: NA}", fontSize = 9.sp, letterSpacing = 1.sp, color = TextMuted, modifier = Modifier.padding(top = 2.dp))
     }
 }
 

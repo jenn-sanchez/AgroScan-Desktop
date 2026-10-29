@@ -5,9 +5,14 @@ import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.agroscan.project.core.DataFolder
+import org.agroscan.project.core.EventLog
 import org.agroscan.project.core.MiniJson
+import org.agroscan.project.features.camera.CameraFeed
 import org.agroscan.project.features.redlocal.LocalHotspot
+import java.io.File
 import java.net.InetAddress
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.net.InetSocketAddress
 import kotlin.concurrent.thread
 
@@ -18,6 +23,8 @@ import kotlin.concurrent.thread
  *
  * - `GET /salidas` → `{"salidas":["uuid", …]}`: las salidas que la PC ya tiene (el teléfono envía solo las que faltan).
  * - `POST /salidas/<uuid>` con el JSON de la salida y sus dos archivos → `{"ok":true,"nuevo":true|false}`.
+ * - `POST /logs/enlace-pc-AAAA-MM-DD.log` con el registro del enlace del teléfono (texto) → se guarda en `logs\telefono\`
+ *   (reemplaza al anterior del mismo día: el teléfono lo va completando). Sirve para revisar los cortes después de volar.
  *
  * Como la telemetría: el puerto se abre **solo en la IP de la zona móvil** y solo mientras la Red Local está encendida, y solo se
  * aceptan equipos de esa red. Lo que llega solo se guarda como texto (nunca se ejecuta), cada salida se escribe una sola vez y el
@@ -47,7 +54,8 @@ object FlightLogServer {
      */
     fun start(
         listenAddress: () -> InetAddress? = LocalHotspot::address,
-        store: () -> FlightLogStore = { FlightLogStore(DataFolder.vuelos) }
+        store: () -> FlightLogStore = { FlightLogStore(DataFolder.vuelos) },
+        logsDir: () -> File = { EventLog.dir }
     ) {
         if (started) return
         started = true
@@ -58,11 +66,20 @@ object FlightLogServer {
                 if (address != null && server == null) {
                     server = runCatching {
                         HttpServer.create(InetSocketAddress(address, PORT), 0).apply {
-                            createContext("/salidas") { handle(it, store()) }
+                            createContext("/salidas") { handle(it, store(), logsDir()) }
+                            createContext("/logs") { handle(it, store(), logsDir()) }
+                            // Vista previa de la cámara: mismo puerto para no pedir otro permiso del Firewall
+                            createContext("/camara") { CameraFeed.handle(it) }
                             start()   // un solo hilo atiende: los envíos del teléfono van de a uno
                         }
-                    }.onFailure { _error.value = "No se pudo abrir el puerto TCP $PORT: ${it.message}" }.getOrNull()
-                    if (server != null) _error.value = null
+                    }.onFailure {
+                        _error.value = "No se pudo abrir el puerto TCP $PORT: ${it.message}"
+                        EventLog.log("registros", "ERROR al abrir el puerto TCP $PORT: ${it.message}")
+                    }.getOrNull()
+                    if (server != null) {
+                        _error.value = null
+                        EventLog.log("registros", "Escuchando registros de vuelo y cámara en ${address.hostAddress}:$PORT")
+                    }
                 } else if (address == null && server != null) {
                     server.stop(0)   // se apagó la Red Local: se suelta el puerto
                     server = null
@@ -72,7 +89,7 @@ object FlightLogServer {
         }
     }
 
-    private fun handle(ex: HttpExchange, store: FlightLogStore) {
+    private fun handle(ex: HttpExchange, store: FlightLogStore, logsDir: File) {
         try {
             if (!LocalHotspot.isLocalNetwork(ex.remoteAddress.address)) return reply(ex, 403, error("Solo se aceptan datos de la Red Local"))
             val path = ex.requestURI.path.trimEnd('/')
@@ -80,9 +97,11 @@ object FlightLogServer {
                 ex.requestMethod == "GET" && path == "/salidas" ->
                     reply(ex, 200, """{"salidas":[${store.received().joinToString(",") { "\"$it\"" }}]}""")
                 ex.requestMethod == "POST" && path.startsWith("/salidas/") -> receive(ex, store, path.removePrefix("/salidas/"))
+                ex.requestMethod == "POST" && path.startsWith("/logs/") -> receiveLog(ex, path.removePrefix("/logs/"), logsDir)
                 else -> reply(ex, 404, error("No existe"))
             }
         } catch (e: Exception) {
+            EventLog.log("registros", "ERROR atendiendo ${ex.requestMethod} ${ex.requestURI.path}: ${e.message}")
             runCatching { reply(ex, 500, error("Error en la PC: ${e.message}")) }
         } finally {
             ex.close()
@@ -100,7 +119,26 @@ object FlightLogServer {
         val eventos = json["eventos_jsonl"] as? String ?: return reply(ex, 400, error("Falta eventos_jsonl"))
         val nuevo = store.save(info, registro, eventos)
         if (nuevo) _received.value = System.currentTimeMillis()
+        EventLog.log(
+            "registros",
+            "Salida ${info.indice + 1} de \"${info.mision}\" ${if (nuevo) "recibida (${eventos.lineSequence().count { "\"evento\":\"marca\"" in it }} marcas)" else "ya estaba: no se toca"}"
+        )
         reply(ex, 200, """{"ok":true,"nuevo":$nuevo}""")
+    }
+
+    /** Nombre de los registros del enlace que manda el teléfono: nada de rutas, solo este formato. */
+    private val LOG_NAME = Regex("""enlace-pc-\d{4}-\d{2}-\d{2}\.log""")
+
+    /** Registro del enlace del teléfono: texto, se guarda en `<dir>\telefono\<nombre>` reemplazando al anterior del mismo día. */
+    internal fun receiveLog(ex: HttpExchange, name: String, dir: File) {
+        if (!LOG_NAME.matches(name)) return reply(ex, 400, error("Nombre de registro no válido"))
+        val bytes = ex.requestBody.readNBytes(MAX_BODY + 1)
+        if (bytes.size > MAX_BODY) return reply(ex, 413, error("El registro es demasiado grande"))
+        val target = File(File(dir, "telefono").apply { mkdirs() }, name)
+        val tmp = File(target.parentFile, "$name.tmp")
+        tmp.writeBytes(bytes)
+        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        reply(ex, 200, """{"ok":true}""")
     }
 
     private fun error(message: String) = """{"error":${MiniJson.quote(message)}}"""

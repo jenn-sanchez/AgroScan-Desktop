@@ -1,6 +1,7 @@
 package org.agroscan.project.features.telemetry
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.agroscan.project.core.EventLog
 import org.agroscan.project.core.MiniJson
 import org.agroscan.project.features.redlocal.LocalHotspot
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +25,8 @@ data class LiveTelemetry(
     val altM: Double,
     val velMs: Double,
     val rumbo: Double?,
+    /** Hacia dónde se mueve (grados brújula); null si está casi quieto o el teléfono no lo manda. */
+    val curso: Double? = null,
     val bat: Int,
     val sat: Int,
     val enlace: Int,
@@ -36,8 +39,14 @@ data class LiveTelemetry(
     val grabando: Boolean,
     val fotos: Int,
     val tVueloS: Long,
+    /** Segundos que lleva grabando el video de esta salida (0 si no graba). */
+    val tRecS: Long = 0,
+    /** Cuadros del video que salen de lo recorrido, como en la pantalla de misión del teléfono. */
+    val cuadros: Int = 0,
     /** El teléfono está conectado al dron; con false el resto de datos del dron son valores por defecto y no deben mostrarse. */
-    val dron: Boolean = true
+    val dron: Boolean = true,
+    /** Paso en que el operador prepara la misión en el teléfono (`perimetro`, `planificacion`, `verificacion`); null fuera de ellos. */
+    val etapa: String? = null
 )
 
 /** Fases en que la salida está en marcha (las mismas que "running" en la app del dron). */
@@ -108,6 +117,19 @@ object TelemetryReceiver {
 
     @Volatile private var started = false
 
+    private val _senal = MutableStateFlow<Int?>(null)
+    /** Qué parte de los paquetes del teléfono llegó en los últimos 30 s (0–100); null sin datos suficientes. */
+    val senal: StateFlow<Int?> = _senal
+
+    private val monitor = LinkMonitor { EventLog.log("telemetria", it) }
+    @Volatile private var lastSource = "?"
+
+    /** La situación actual en pocas palabras, para el registro. */
+    private fun estado(): String = _live.value?.let {
+        "fase ${it.fase.ifEmpty { "?" }}, ${if (it.dron) "dron conectado" else "dron SIN conectar"}, batería ${it.bat} %, " +
+            "${if (it.enMision) "en misión" else "sin misión"}, teléfono $lastSource"
+    } ?: "sin datos aún, teléfono $lastSource"
+
     /**
      * Empieza a escuchar en un hilo propio. Llamarla de nuevo no hace nada. Espera a que exista la IP de la zona móvil (Red Local
      * encendida), abre el puerto solo en ella y lo suelta si la Red Local se apaga. [listenAddress] solo se cambia en las pruebas.
@@ -131,35 +153,54 @@ object TelemetryReceiver {
                 DatagramSocket(InetSocketAddress(address, PORT)).use { socket ->
                     socket.soTimeout = CHECK_MS.toInt()
                     _error.value = null
+                    EventLog.log("red", "Red Local encendida: escuchando la telemetría en ${address.hostAddress}:$PORT")
                     while (true) {
                         val packet = DatagramPacket(buffer, buffer.size)
                         try {
                             socket.receive(packet)
                         } catch (_: SocketTimeoutException) {
-                            if (listenAddress() == null) break   // se apagó la Red Local: se suelta el puerto
+                            monitor.tick(System.currentTimeMillis(), estado())
+                            _senal.value = monitor.quality
+                            if (listenAddress() == null) {   // se apagó la Red Local: se suelta el puerto
+                                EventLog.log("red", "La Red Local se apagó (la IP ${address.hostAddress} ya no existe): se soltó el puerto de la telemetría")
+                                break
+                            }
                             continue
                         }
                         if (!LocalHotspot.isLocalNetwork(packet.address)) continue
+                        lastSource = packet.address.hostAddress
+                        val now = System.currentTimeMillis()
                         // Un paquete que provoque un error inesperado se descarta: nunca debe apagar el receptor
-                        runCatching { handle(String(packet.data, 0, packet.length, Charsets.UTF_8), System.currentTimeMillis()) }
+                        val seq = runCatching { handle(String(packet.data, 0, packet.length, Charsets.UTF_8), now) }.getOrNull()
+                        monitor.packet(now, seq, estado())
+                        _senal.value = monitor.quality
                     }
                 }
             } catch (e: IOException) {
                 // Si la Red Local se apagó en medio, no es un error; si no (otro programa usa el puerto), se avisa y se reintenta
-                if (listenAddress() != null) _error.value = "No se pudo escuchar el puerto UDP $PORT: ${e.message}"
+                if (listenAddress() != null) {
+                    _error.value = "No se pudo escuchar el puerto UDP $PORT: ${e.message}"
+                    EventLog.log("red", "ERROR al escuchar la telemetría: ${e.message}")
+                }
                 Thread.sleep(CHECK_MS)
             }
         }
     }
 
-    /** Procesa un paquete. Los que no son JSON válido o no traen lo esperado se ignoran. */
-    internal fun handle(text: String, now: Long) {
-        val json = runCatching { MiniJson.parse(text) }.getOrNull() as? Map<*, *> ?: return
+    /** Procesa un paquete y devuelve su `seq` (para medir la señal). Los que no son JSON válido o no traen lo esperado se ignoran. */
+    internal fun handle(text: String, now: Long): Long? {
+        val json = runCatching { MiniJson.parse(text) }.getOrNull() as? Map<*, *> ?: return null
         when (json["tipo"]) {
             "tel" -> parseTelemetry(json, now)?.let(::accept)
-            "plan" -> parsePlan(json, now)?.let { _plan.value = it }
+            "plan" -> parsePlan(json, now)?.let {
+                if (_plan.value?.mision != it.mision || _plan.value?.salida != it.salida) {
+                    EventLog.log("mision", "Plan recibido: \"${it.mision}\", salida ${it.salida} de ${it.salidas}, ${it.ruta.size} waypoints")
+                }
+                _plan.value = it
+            }
             "lote" -> parseLote(json, now)?.let { _lote.value = it }
         }
+        return (json["seq"] as? Double)?.toLong()
     }
 
     private fun accept(t: LiveTelemetry) {
@@ -186,13 +227,15 @@ object TelemetryReceiver {
             tMs = num("t_ms")?.toLong() ?: return null,
             recibidoMs = now,
             lat = num("lat"), lon = num("lon"),
-            altM = num("alt_m") ?: 0.0, velMs = num("vel_ms") ?: 0.0, rumbo = num("rumbo"),
+            altM = num("alt_m") ?: 0.0, velMs = num("vel_ms") ?: 0.0, rumbo = num("rumbo"), curso = num("curso"),
             bat = num("bat")?.toInt() ?: 0, sat = num("sat")?.toInt() ?: 0, enlace = num("enlace")?.toInt() ?: 0,
             fase = j["fase"] as? String ?: "", volando = j["volando"] as? Boolean ?: false,
             wp = num("wp")?.toInt() ?: 0, wpTotal = num("wp_total")?.toInt() ?: 0,
             avance = num("avance") ?: 0.0, distM = num("dist_m") ?: 0.0,
             grabando = j["grabando"] as? Boolean ?: false, fotos = num("fotos")?.toInt() ?: 0, tVueloS = num("t_vuelo_s")?.toLong() ?: 0,
-            dron = j["dron"] as? Boolean ?: true
+            tRecS = num("t_rec_s")?.toLong() ?: 0, cuadros = num("cuadros")?.toInt() ?: 0,
+            dron = j["dron"] as? Boolean ?: true,
+            etapa = j["etapa"] as? String
         )
     }
 

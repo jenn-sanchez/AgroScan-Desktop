@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
 import org.agroscan.project.core.DataFolder
 import org.agroscan.project.features.flightlog.FlightLogServer
 import org.agroscan.project.features.flightlog.FlightLogStore
-import org.agroscan.project.features.flightlog.VideoImporter
+import org.agroscan.project.features.flightlog.VideoImport
 import java.awt.Desktop
 import java.io.File
 import javax.swing.JFileChooser
@@ -44,7 +44,9 @@ fun ProcesamientoUi() {
     val carpeta by DataFolder.current.collectAsState()
     val recibido by FlightLogServer.received.collectAsState()
     var refresco by remember { mutableStateOf(0) }
-    val vuelos by produceState(emptyList<VueloVista>(), carpeta, recibido, refresco) {
+    // La lista se vuelve a leer cuando termina (o empieza) una importación: la copia sigue aunque se cambie de pestaña
+    val importando = VideoImport.estado.collectAsState().value.activo
+    val vuelos by produceState(emptyList<VueloVista>(), carpeta, recibido, refresco, importando) {
         value = withContext(Dispatchers.IO) { leerVuelos() }
     }
 
@@ -64,7 +66,7 @@ fun ProcesamientoUi() {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             CarpetaCard(carpeta)
-            ImportarCard { refresco++ }
+            ImportarCard()
             VuelosCard(vuelos) { refresco++ }
         }
     }
@@ -103,54 +105,52 @@ private fun CarpetaCard(carpeta: File) = Card(Modifier.fillMaxWidth()) {
 }
 
 @Composable
-private fun ImportarCard(onImportado: () -> Unit) = Card(Modifier.fillMaxWidth()) {
-    var progreso by remember { mutableStateOf<String?>(null) }
-    var resultado by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+private fun ImportarCard() = Card(Modifier.fillMaxWidth()) {
+    // El estado vive en VideoImport (no aquí): cambiar de pestaña no interrumpe la copia y al volver se ve cómo va
+    val estado by VideoImport.estado.collectAsState()
 
     Titulo(Icons.Filled.SdCard, "Importar videos de la microSD")
     Spacer(Modifier.height(4.dp))
     Text(
-        "Elige la tarjeta del dron (o su carpeta DCIM). Cada video se copia solo a la salida en que se grabó; " +
-            "los que no son de una misión se ignoran. Primero tiene que haber llegado el registro de esa salida desde el teléfono.",
+        "Pon la tarjeta del dron en el lector: se detecta sola (si no, te pide elegirla). Cada video se copia solo a la salida en que " +
+            "se grabó; los que no son de una misión se ignoran. Primero tiene que haber llegado el registro de esa salida desde el teléfono. " +
+            "La copia es idéntica al original, sin perder calidad, y sigue aunque cambies de pestaña.",
         fontSize = 11.sp, color = TextMuted
     )
     Spacer(Modifier.height(10.dp))
-    Button(
-        onClick = {
-            val origen = elegirCarpeta("Tarjeta microSD del dron", null) ?: return@Button
-            resultado = null
-            progreso = "Buscando videos…"
-            scope.launch {
-                val r = withContext(Dispatchers.IO) {
-                    runCatching { VideoImporter(FlightLogStore(DataFolder.vuelos)).importar(origen) { progreso = it } }
-                }
-                progreso = null
-                resultado = r.fold(
-                    { res ->
-                        buildString {
-                            append("${res.copiados} video(s) copiado(s)")
-                            if (res.yaEstaban > 0) append(", ${res.yaEstaban} ya estaban")
-                            if (res.sinSalida.isNotEmpty()) append(", ${res.sinSalida.size} sin salida (no son de una misión o falta su registro)")
-                        }
-                    },
-                    { "No se pudo importar: ${it.message}" }
-                )
-                onImportado()
-            }
-        },
-        enabled = progreso == null,
-        shape = RoundedCornerShape(8.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Green)
-    ) {
-        if (progreso != null) CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-        else Icon(Icons.Filled.Download, null, Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Importar desde la microSD")
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = {
+                val origen = VideoImport.detectarTarjeta() ?: elegirCarpeta("Tarjeta microSD del dron", null, mostrarArchivos = true) ?: return@Button
+                VideoImport.iniciar(origen, FlightLogStore(DataFolder.vuelos))
+            },
+            enabled = !estado.activo,
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Green)
+        ) {
+            if (estado.activo) CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+            else Icon(Icons.Filled.Download, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Importar desde la microSD")
+        }
+        if (estado.activo) TextButton(onClick = VideoImport::cancelar) { Text("Cancelar", color = Color(0xFFDC2626)) }
     }
-    (progreso ?: resultado)?.let {
+    estado.progreso?.let { p ->
+        Spacer(Modifier.height(10.dp))
+        LinearProgressIndicator(
+            progress = { p.fraccion }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
+            color = Green, trackColor = Color(0xFFE5E7EB), drawStopIndicator = {}
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(VideoImport.texto(p), fontSize = 11.sp, color = TextDark)
+    }
+    if (estado.buscando) {
         Spacer(Modifier.height(8.dp))
-        Text(it, fontSize = 11.sp, color = if (progreso != null) TextMuted else TextDark)
+        Text("Buscando videos en la tarjeta…", fontSize = 11.sp, color = TextMuted)
+    }
+    estado.mensaje?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, fontSize = 11.sp, color = TextDark)
     }
 }
 
@@ -207,12 +207,16 @@ private fun leerVuelos(): List<VueloVista> =
             })
         }
 
-/** Diálogo de Windows para elegir una carpeta; null si se cancela. */
-private fun elegirCarpeta(titulo: String, inicial: File?): File? {
+/**
+ * Diálogo de Windows para elegir una carpeta; null si se cancela. Con [mostrarArchivos] también lista los archivos (para ver que es
+ * la carpeta de los videos); si se elige un archivo se toma su carpeta.
+ */
+private fun elegirCarpeta(titulo: String, inicial: File?, mostrarArchivos: Boolean = false): File? {
     runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }   // aspecto de Windows, no el de Java
     val chooser = JFileChooser(inicial).apply {
         dialogTitle = titulo
-        fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+        fileSelectionMode = if (mostrarArchivos) JFileChooser.FILES_AND_DIRECTORIES else JFileChooser.DIRECTORIES_ONLY
     }
-    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+    if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return null
+    return chooser.selectedFile.let { if (it.isFile) it.parentFile else it }
 }

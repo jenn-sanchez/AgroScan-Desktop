@@ -166,8 +166,8 @@ private fun ImportarCard() = Card(Modifier.fillMaxWidth()) {
 @Composable
 private fun PreprocesoCard() = Card(Modifier.fillMaxWidth()) {
     val estado by Preprocesamiento.estado.collectAsState()
-    val modulo by PreprocessModule.folder.collectAsState()
-    val problema = remember(modulo) { PreprocessModule.problema(modulo) }
+    // El módulo viene con la app (ver PreprocessModule); solo se avisa si falta
+    val problema = remember { PreprocessModule.ubicar().exceptionOrNull()?.message }
 
     Titulo(Icons.Filled.AutoAwesome, "Preprocesamiento de imágenes")
     Spacer(Modifier.height(4.dp))
@@ -176,15 +176,10 @@ private fun PreprocesoCard() = Card(Modifier.fillMaxWidth()) {
             "con sus metadatos. Todo en esta PC, sin internet. Elige una salida con video en «Vuelos recibidos» y pulsa Preprocesar.",
         fontSize = 11.sp, color = TextMuted
     )
-    Spacer(Modifier.height(10.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Módulo: ", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextDark)
-        Text(modulo.absolutePath, Modifier.weight(1f), fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        TextButton(onClick = { elegirCarpeta("Carpeta del módulo de preprocesamiento", modulo)?.let(PreprocessModule::set) }, enabled = !estado.activo) {
-            Text("Cambiar…", color = Green)
-        }
+    problema?.let {
+        Spacer(Modifier.height(6.dp))
+        Text(it, fontSize = 11.sp, color = Color(0xFFDC2626))
     }
-    problema?.let { Text(it, fontSize = 11.sp, color = Color(0xFFDC2626)) }
 
     if (estado.titulo.isNotEmpty()) {
         Spacer(Modifier.height(8.dp))
@@ -212,7 +207,7 @@ private fun PreprocesoCard() = Card(Modifier.fillMaxWidth()) {
                 Chip(true, "${r.modificadas} modificadas")
                 Chip(true, "${r.conAdvertencias} con advertencias")
                 if (r.conPendientes > 0) Chip(false, "${r.conPendientes} con problemas pendientes")
-                if (r.sinRecorrido > 0) Chip(false, "${r.sinRecorrido} video(s) sin recorrido detectado")
+                if (r.sinRecorrido > 0) Chip(false, "${r.sinRecorrido} video(s) sin recorrido detectado: imágenes por intervalo fijo")
             }
         }
         estado.error?.let {

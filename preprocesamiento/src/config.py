@@ -1,8 +1,10 @@
+import os
 from pathlib import Path
 
 RAIZ_PROYECTO = Path(__file__).resolve().parent.parent
 
-CARPETA_DATOS = RAIZ_PROYECTO / "data"
+# AgroScan Desktop la cambia: instalado, la carpeta del programa no se puede escribir
+CARPETA_DATOS = Path(os.environ.get("AGROSCAN_PREPROCESO_DATOS", RAIZ_PROYECTO / "data"))
 
 CARPETA_VIDEOS = CARPETA_DATOS / "videos"
 CARPETA_FRAMES_ORIGINALES = CARPETA_DATOS / "frames_originales"

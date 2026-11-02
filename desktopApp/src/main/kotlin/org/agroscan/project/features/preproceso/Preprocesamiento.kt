@@ -29,7 +29,7 @@ object Preprocesamiento {
         val modificadas: Int = 0,
         val conAdvertencias: Int = 0,
         val conPendientes: Int = 0,
-        /** Videos en que el módulo no detectó el recorrido y no generó imágenes finales. */
+        /** Videos en que el módulo no detectó el recorrido y eligió las imágenes cada cierto tiempo (plan B), sin medir el solape. */
         val sinRecorrido: Int = 0
     ) {
         operator fun plus(o: Resumen) = Resumen(
@@ -80,15 +80,16 @@ object Preprocesamiento {
     /** Preprocesa [videos]: cada uno en `<resultados>\<nombre del video>\`. No hace nada si ya hay uno en marcha. */
     fun iniciar(videos: List<File>, resultados: File, mision: String, titulo: String) {
         if (_estado.value.activo) return
-        val modulo = PreprocessModule.folder.value
-        val problema = PreprocessModule.problema(modulo) ?: if (videos.isEmpty()) "No hay videos para procesar" else null
+        val ubicado = PreprocessModule.ubicar()
+        val problema = ubicado.exceptionOrNull()?.message ?: if (videos.isEmpty()) "No hay videos para procesar" else null
         if (problema != null) {
             _estado.value = Estado(titulo = titulo, resultados = resultados, error = problema)
             return
         }
+        val modulo = ubicado.getOrThrow()
         cancelar = false
         _estado.value = Estado(activo = true, titulo = titulo, resultados = resultados, videos = videos.size, etapa = "Preparando video")
-        EventLog.log("preproceso", "Inicio: $titulo · ${videos.size} video(s) · módulo en $modulo")
+        EventLog.log("preproceso", "Inicio: $titulo · ${videos.size} video(s) · módulo: ${modulo.programa.joinToString(" ")} en ${modulo.carpeta}")
         scope.launch {
             var total = Resumen()
             for ((i, video) in videos.withIndex()) {
@@ -121,14 +122,13 @@ object Preprocesamiento {
     }
 
     /** Ejecuta el módulo con un video y devuelve su resumen (o el error que informó). */
-    private fun procesar(modulo: File, video: File, salida: File, mision: String, i: Int, n: Int): Result<Resumen> {
+    private fun procesar(modulo: PreprocessModule.Modulo, video: File, salida: File, mision: String, i: Int, n: Int): Result<Resumen> {
         _estado.value = _estado.value.copy(video = i + 1, nombreVideo = video.name)
         val log = File(EventLog.dir.apply { mkdirs() }, "preproceso-${LocalDate.now()}.log")
-        val pb = ProcessBuilder(PreprocessModule.command(modulo, video, salida, mision)).directory(modulo)
+        val p = PreprocessModule.proceso(modulo, video, salida, mision)
             // El registro detallado del módulo sale por la salida de errores: hay que leerlo o el proceso se traba al llenarse
             .redirectError(ProcessBuilder.Redirect.appendTo(log))
-        pb.environment()["PYTHONIOENCODING"] = "utf-8"
-        val p = pb.start()
+            .start()
         proceso = p
         var resultado: Result<Resumen>? = null
         p.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { linea ->

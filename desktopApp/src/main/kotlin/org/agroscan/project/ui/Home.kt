@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import org.agroscan.project.features.login.Auth
 import org.agroscan.project.core.Database
 import org.agroscan.project.features.home.HomeData
+import org.agroscan.project.features.sync.HistorySync
 import java.io.File
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -202,7 +203,9 @@ private fun DbStatusPill() {
 
 @Composable
 private fun Dashboard() {
-    val resumen by produceState<Result<HomeData.Resumen>?>(null) {
+    // Se vuelve a consultar cuando llega un historial del teléfono
+    val historial by HistorySync.recibido.collectAsState()
+    val resumen by produceState<Result<HomeData.Resumen>?>(null, historial) {
         val id = Auth.usuario.value?.id ?: return@produceState
         value = withContext(Dispatchers.IO) { HomeData.resumen(id) }
         value?.onFailure { System.err.println("Base de datos: ${it.message}") }

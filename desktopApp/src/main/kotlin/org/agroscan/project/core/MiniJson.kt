@@ -7,7 +7,7 @@ package org.agroscan.project.core
  */
 internal object MiniJson {
 
-    private const val MAX_DEPTH = 8   // lo que manda el teléfono tiene a lo sumo 2 niveles; más profundidad es basura
+    private const val MAX_DEPTH = 8   // lo que manda el teléfono tiene a lo sumo 4 niveles (historial); más profundidad es basura
 
     /** [text] como texto JSON entre comillas, con los caracteres especiales escapados. */
     fun quote(text: String): String = buildString {

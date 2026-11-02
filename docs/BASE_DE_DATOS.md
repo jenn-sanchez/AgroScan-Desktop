@@ -14,8 +14,8 @@ todavía no llegan a la base. Para instalarla en una PC nueva, ver también la s
  │ + registro de vuelo  │   de vuelo)    │                                              │
  └──────────────────────┘                │ PostgreSQL "dron_control"                     │
             │                            │   usuario  ← login y registro (HOY)           │
-            └ ─ ─ ─ ─ POST /sync ─ ─ ─ ▶ │   lote, vertice, parametros_vuelo, mision,    │  ← PENDIENTE: el historial
-              (pendiente, sección 6)     │   vuelo, salida, dispositivo                  │    (hoy esas tablas están vacías)
+            └ ─ ─ ─ ─ POST /sync ─ ─ ─ ▶ │   lote, vertice, parametros_vuelo, mision,    │  ← HOY: el historial, con
+              (sección 6)                │   vuelo, salida, dispositivo                  │    cada envío del teléfono
                                          └──────────────────────────────────────────────┘
 ```
 
@@ -24,7 +24,7 @@ todavía no llegan a la base. Para instalarla en una PC nueva, ver también la s
 | Cuentas (cédula, nombre, hash de la contraseña) | Tabla `usuario` | **Funciona** |
 | Sesión abierta | En la PC (Preferences de Java), **no** en la base: así se entra sin conexión | **Funciona** |
 | Registro de vuelo, marcas del video, videos, logs del enlace | Archivos en la carpeta de datos (son grandes y se usan sin conexión) | **Funciona** |
-| Lotes, misiones, vuelos y salidas del teléfono | Tablas `lote`, `vertice`, `parametros_vuelo`, `mision`, `vuelo`, `salida` | **Pendiente**: el esquema existe, pero nada las llena todavía. Por eso Inicio muestra 0 / N/A |
+| Lotes, misiones, vuelos y salidas del teléfono | Tablas `lote`, `vertice`, `parametros_vuelo`, `mision`, `vuelo`, `salida` | **Funciona**: llegan del teléfono con cada envío (`POST /sync`, sección 6) |
 
 ## 2. Cómo se conecta la app
 
@@ -107,26 +107,27 @@ logs del enlace se guardan como **archivos** en la carpeta de datos (`Documentos
 - La carpeta de cada salida se encuentra por el UUID de la salida (`salida.json`), el mismo de la tabla `salida`: la base puede
   apuntar a los archivos sin copiarlos.
 
-## 6. Cómo se conectarían los datos del teléfono con la base (pendiente)
+## 6. Cómo llegan los datos del teléfono a la base
 
-Hoy el teléfono envía a la PC **los registros de vuelo** de cada salida, pero no su **historial** (lotes, misiones, vuelos). Esta es
-la forma de llenar las tablas, siguiendo lo que ya funciona para los registros:
+El teléfono envía a la PC **los registros de vuelo** de cada salida (archivos) y, con ellos, todo su **historial** (lotes, misiones,
+vuelos y salidas) para estas tablas. Código: [`features/sync/HistorySync.kt`](../desktopApp/src/main/kotlin/org/agroscan/project/features/sync/HistorySync.kt)
+en la PC y `network/HistorySync.kt` en el teléfono; formato en `docs/PROTOCOLO_PC.md` del proyecto del dron.
 
 **Quién manda:** el teléfono es la fuente de verdad (vuela sin internet); la base de la PC es la copia. Va en un solo sentido:
 teléfono → PC.
 
 **Cómo:** una petición nueva en el mismo servidor HTTP de la Red Local (puerto 8766, sin otro permiso del Firewall):
 `POST /sync` con **todo** el historial del teléfono en JSON (son pocos KB; mandar todo evita llevar la cuenta de qué falta y nunca se
-desincroniza). Se mandaría junto con los registros de vuelo: al cerrar cada salida y con "Enviar vuelos pendientes".
+desincroniza). Va junto con los registros de vuelo: al cerrar cada salida y con "Enviar vuelos pendientes".
 
 **Qué hace la PC con cada envío**, en **una sola transacción** (si algo falla, no queda nada a medias):
 1. Inserta o actualiza cada registro **por UUID** (`INSERT … ON CONFLICT (id) DO UPDATE`), padres antes que hijos:
    lote → vértices → parámetros → misión → vuelo → salida. Mandar lo mismo dos veces no duplica nada.
 2. `creado_por` (lote, misión), `iniciado_por` (vuelo) y `operador_id` (salida) = el **usuario con sesión en la PC**: el teléfono no
-   tiene cuentas.
-3. Arma `lote.perimetro` con los vértices (PostGIS: `ST_MakePolygon` con el primer vértice repetido al final, SRID 4326) y
-   `area_ha` con `ST_Area(perimetro::geography) / 10000`.
-4. Registra el teléfono en `dispositivo` y lo pone en `salida.dispositivo_id`.
+   tiene cuentas. Sin sesión responde `409` y no guarda nada (el próximo envío trae todo). Lo que ya estaba conserva a su dueño.
+3. Arma `lote.perimetro` con los vértices (PostGIS: polígono con el primer vértice repetido al final, SRID 4326) y
+   `area_ha` con `ST_Area(perimetro::geography) / 10000`; si el lote tiene menos de 3 vértices, usa el área del teléfono.
+4. Todavía **no** registra el teléfono en `dispositivo` (`salida.dispositivo_id` queda vacío): el teléfono no manda un identificador propio.
 
 **De Room (teléfono) a PostgreSQL (PC):** el esquema de la PC se hizo a partir del del teléfono, así que es casi 1 a 1:
 
@@ -147,8 +148,8 @@ Fechas: el teléfono guarda milisegundos UTC; las columnas `timestamp with time 
 - **Varias PCs:** cada PC tiene su base local. Juntar todo en un **PostGIS en línea** sería un paso después: la misma subida por
   UUID, de la base local a la central, cuando haya internet.
 
-**Dónde iría el código:** `features/sync/` en la PC (la ruta `/sync` y la transacción) y `network/HistorySync` en el teléfono (arma el
-JSON con Room), con el formato documentado en `docs/PROTOCOLO_PC.md` del proyecto del dron, como los demás canales.
+**Prueba:** `HistorySyncTest` guarda un historial dos veces en la base de esta PC **dentro de una transacción que siempre se deshace**
+(no deja nada) y revisa que no se duplique y que el Inicio lo lea. En una PC sin `AGROSCAN_DB_URL` esa parte no se prueba.
 
 ## 7. Seguridad
 

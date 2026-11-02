@@ -1,46 +1,47 @@
 package org.agroscan.project.features.preproceso
 
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import java.io.File
-import java.util.prefs.Preferences
-import javax.swing.filechooser.FileSystemView
 
 /**
- * Dónde está el módulo de preprocesamiento de imágenes (Python, repositorio `agroscan-preprocesamiento`) y cómo se ejecuta.
- * La app lo ejecuta por detrás, sin ventana ni servidor, con el contrato que el módulo documenta: `main.py --video … --salida …
- * --json` escribe una línea JSON por evento en la salida estándar.
+ * Dónde está el módulo de preprocesamiento de imágenes (Python, carpeta `preprocesamiento/` del repositorio) y cómo se ejecuta.
+ * La app lo ejecuta por detrás, sin ventana ni servidor, con el contrato que el módulo documenta: `--video … --salida … --json`
+ * escribe una línea JSON por evento en la salida estándar.
  *
- * shortcut: cada PC necesita el módulo descargado y su entorno de Python (`venv`); cuando el módulo esté estable, empaquetarlo como
- * .exe dentro del instalador de AgroScan y buscarlo aquí primero.
+ * - Programando (`./gradlew :desktopApp:run` o IntelliJ): el código de `preprocesamiento/` con el Python de su `venv`, que crea
+ *   `./gradlew prepararPreproceso`. Así un cambio en el módulo se prueba sin volver a empaquetar.
+ * - Instalado: `agroscan-preproceso.exe`, que el instalador trae en los recursos de la app con su propio Python y librerías.
  */
-object  PreprocessModule {
+object PreprocessModule {
 
-    private const val CLAVE = "moduloPreproceso"
-    private val prefs = Preferences.userRoot().node("org/agroscan/desktop")
+    /** Cómo se ejecuta: el programa con sus primeros argumentos, desde [carpeta]. */
+    data class Modulo(val programa: List<String>, val carpeta: File)
 
-    /** Por defecto `Documentos\agroscan-preprocesamiento`, donde se descarga el repositorio. */
-    val default: File get() = File(FileSystemView.getFileSystemView().defaultDirectory, "agroscan-preprocesamiento")
+    /** Carpeta de trabajo propia del módulo (su registro y carpetas vacías): instalado, la carpeta del programa no se puede escribir. */
+    val trabajo = File(System.getenv("LOCALAPPDATA") ?: System.getProperty("java.io.tmpdir"), "AgroScan/preproceso")
 
-    private val _folder = MutableStateFlow(prefs.get(CLAVE, null)?.let(::File) ?: default)
-    val folder: StateFlow<File> = _folder
-
-    fun set(dir: File) {
-        prefs.put(CLAVE, dir.absolutePath)
-        prefs.flush()
-        _folder.value = dir
+    /** El módulo de esta PC, o por qué no se puede usar. */
+    fun ubicar(): Result<Modulo> {
+        fuente()?.let { dir ->
+            val python = File(dir, "venv/Scripts/python.exe")
+            return if (python.isFile) Result.success(Modulo(listOf(python.path, "main.py"), dir))
+            else Result.failure(IllegalStateException("Falta el entorno de Python del módulo: ejecuta ./gradlew prepararPreproceso (ver README)"))
+        }
+        val exe = System.getProperty("compose.application.resources.dir")?.let { File(it, "agroscan-preproceso/agroscan-preproceso.exe") }
+        return if (exe != null && exe.isFile) Result.success(Modulo(listOf(exe.path), exe.parentFile))
+        else Result.failure(IllegalStateException("No se encontró el módulo de preprocesamiento; reinstala AgroScan"))
     }
 
-    /** Qué le falta a [dir] para poder usarse; null si está listo. */
-    fun problema(dir: File): String? = when {
-        !File(dir, "main.py").isFile -> "No se encontró el módulo en $dir (falta main.py). Descárgalo o elige su carpeta."
-        else -> null
-    }
+    /** La carpeta `preprocesamiento/` del repositorio si la app corre desde él (la busca subiendo desde la carpeta actual). */
+    private fun fuente(): File? = generateSequence(File(System.getProperty("user.dir")).absoluteFile) { it.parentFile }
+        .map { File(it, "preprocesamiento") }
+        .firstOrNull { File(it, "main.py").isFile }
 
-    /** El Python del entorno del módulo (`venv`, con OpenCV y demás instalados) si existe; si no, el del sistema. */
-    fun python(dir: File): String = File(dir, "venv/Scripts/python.exe").takeIf { it.isFile }?.path ?: "python"
-
-    /** El comando para procesar un video. Sin `--servidor`: todo queda en esta PC, no se envía nada a ningún lado. */
-    fun command(dir: File, video: File, salida: File, mision: String): List<String> =
-        listOf(python(dir), "main.py", "--video", video.path, "--salida", salida.path, "--mision", mision, "--json")
+    /** El proceso que preprocesa un video. Sin `--servidor`: todo queda en esta PC, no se envía nada a ningún lado. */
+    fun proceso(modulo: Modulo, video: File, salida: File, mision: String): ProcessBuilder =
+        ProcessBuilder(modulo.programa + listOf("--video", video.path, "--salida", salida.path, "--mision", mision, "--json"))
+            .directory(modulo.carpeta)
+            .apply {
+                environment()["PYTHONIOENCODING"] = "utf-8"
+                environment()["AGROSCAN_PREPROCESO_DATOS"] = trabajo.path   // lo lee src/config.py del módulo
+            }
 }

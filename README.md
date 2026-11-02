@@ -11,7 +11,7 @@ This is a Kotlin Multiplatform project targeting Desktop (JVM).
 
 ### Base de datos (PostgreSQL + PostGIS)
 
-Qué guarda la base, cómo se conecta, qué funciona y cómo se conectarían los datos del teléfono: [`docs/BASE_DE_DATOS.md`](./docs/BASE_DE_DATOS.md).
+Qué guarda la base, cómo se conecta, qué funciona y cómo llegan los datos del teléfono: [`docs/BASE_DE_DATOS.md`](./docs/BASE_DE_DATOS.md).
 
 La app lee y guarda en PostgreSQL. Para configurarla en una PC nueva:
 
@@ -111,22 +111,30 @@ internet ni servidor**; sigue aunque se cambie de pestaña y se puede cancelar. 
 
 - **Resultados:** `salida-N\preproceso\<video>\imagenes_procesadas\` (y `frames_originales\`). Cada video de la salida va a su
   propia carpeta, porque el módulo borra lo que hay en su carpeta al empezar y el dron parte los videos largos.
-- **Cómo lo usa la app:** `main.py --video … --salida … --mision … --json` (el contrato del README del módulo). Lee el avance línea a
+- **Dónde está:** en la carpeta [`preprocesamiento/`](./preprocesamiento) de este repositorio (traída con `git subtree`, con su
+  historial). Al clonar AgroScan ya viene; no hay que descargarla aparte.
+- **Cómo lo usa la app:** `--video … --salida … --mision … --json` (el contrato del README del módulo). Lee el avance línea a
   línea; el registro detallado del módulo queda en `logs\preproceso-AAAA-MM-DD.log`. **No** se le pasa `--servidor`: no se envía nada.
-- **Instalar el módulo (por ahora, en cada PC):**
+  Lo que el módulo escribe por su cuenta va a `%LOCALAPPDATA%\AgroScan\preproceso` (variable `AGROSCAN_PREPROCESO_DATOS`, que lee
+  `preprocesamiento/src/config.py`): instalado, la carpeta del programa no se puede escribir.
+- **Programando (una vez en cada PC):** instalar [Python 3.12](https://www.python.org/downloads/) (las versiones fijas del módulo lo
+  piden) y ejecutar
   ```
-  cd %USERPROFILE%\Documents
-  git clone https://github.com/jeffersonagm/agroscan-preprocesamiento.git
-  cd agroscan-preprocesamiento
-  python -m venv venv
-  venv\Scripts\python.exe -m pip install -r requirements.txt
+  ./gradlew prepararPreproceso
   ```
-  Las versiones fijas del módulo piden **Python 3.12 o más nuevo**; con Python 3.11 instalar sin versiones fijas:
-  `venv\Scripts\python.exe -m pip install opencv-python numpy pillow requests ExifRead`.
-  La app lo busca en `Documentosgroscan-preprocesamiento` y usa su `venv`; otra carpeta se elige en la tarjeta
-  "Preprocesamiento de imágenes" → **Cambiar…**.
-- **Pendiente:** empaquetar el módulo como .exe dentro del instalador (para no instalar Python en cada PC) y que las imágenes lleven
-  GPS (el módulo hoy no sabe dónde estaba el dron; la PC tiene `registro.csv` y la hora de inicio del video en `salida.json`).
+  Crea `preprocesamiento\venv` con las librerías del módulo (OpenCV, NumPy…) y PyInstaller; `venv` no se sube a GitHub. Con
+  `./gradlew :desktopApp:run` (o IntelliJ) la app usa el código de `preprocesamiento/` con ese Python: un cambio en el módulo se
+  prueba sin empaquetar nada.
+- **En el instalador:** `packageMsi` (y `createDistributable`) ejecutan antes `empaquetarPreproceso`, que convierte el módulo en
+  `agroscan-preproceso.exe` con su propio Python y librerías (PyInstaller) y lo mete en los recursos de la app. Quien instala AgroScan
+  **no necesita Python**. Ver [`PreprocessModule.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/preproceso/PreprocessModule.kt).
+- **Traer los cambios de Jefferson** (desde la raíz del repositorio, sin cambios pendientes):
+  ```
+  git subtree pull --prefix preprocesamiento https://github.com/jeffersonagm/agroscan-preprocesamiento.git main --squash
+  ```
+  `src/config.py` tiene un cambio de AgroScan (la variable `AGROSCAN_PREPROCESO_DATOS`); conviene que Jefferson lo tenga también en
+  su repositorio para que el `pull` no choque.
+- **Pendiente:** que las imágenes lleven GPS (el módulo hoy no sabe dónde estaba el dron; la PC tiene `registro.csv` y la hora de inicio del video en `salida.json`).
 
 ### Estructura de la app de escritorio
 
@@ -135,7 +143,7 @@ internet ni servidor**; sigue aunque se cambie de pestaña y se puede cancelar. 
 | Carpeta | Contiene |
 |---|---|
 | `core/` | Solo infraestructura compartida: la conexión a la base (`Database.kt`; cambiar de base no toca las consultas), la carpeta de datos (`DataFolder.kt`), el registro de eventos (`EventLog.kt`) y el lector de JSON (`MiniJson.kt`) |
-| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad: `login`, `home`, `telemetry` (telemetría en vivo y medida de la señal), `flightlog` (registros de vuelo e importación de videos), `camera` (vista previa de la cámara), `preproceso` (ejecuta el módulo de preprocesamiento), `redlocal` (zona móvil y Firewall) |
+| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad: `login`, `home`, `telemetry` (telemetría en vivo y medida de la señal), `flightlog` (registros de vuelo e importación de videos), `camera` (vista previa de la cámara), `preproceso` (ejecuta el módulo de preprocesamiento), `sync` (guarda en la base el historial del teléfono: lotes, misiones, vuelos), `redlocal` (zona móvil y Firewall) |
 | `ui/` | Solo diseño (Compose): llama a `features`, nunca a SQL directamente |
 
 ### Running the apps

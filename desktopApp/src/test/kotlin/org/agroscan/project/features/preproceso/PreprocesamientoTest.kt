@@ -66,8 +66,34 @@ class PreprocesamientoTest {
     }
 
     @Test fun elComandoNoEnviaANingunServidor() {
-        val cmd = PreprocessModule.command(File("C:/m"), File("C:/v/DJI_0001.MP4"), File("C:/s"), "vuelo_salida-1")
-        assertEquals(listOf("main.py", "--video", File("C:/v/DJI_0001.MP4").path, "--salida", File("C:/s").path, "--mision", "vuelo_salida-1", "--json"), cmd.drop(1))
-        assertEquals(false, cmd.contains("--servidor"))
+        val pb = PreprocessModule.proceso(
+            PreprocessModule.Modulo(listOf("python.exe", "main.py"), File("C:/m")), File("C:/v/DJI_0001.MP4"), File("C:/s"), "vuelo_salida-1"
+        )
+        assertEquals(
+            listOf("python.exe", "main.py", "--video", File("C:/v/DJI_0001.MP4").path, "--salida", File("C:/s").path, "--mision", "vuelo_salida-1", "--json"),
+            pb.command()
+        )
+        assertEquals(false, pb.command().contains("--servidor"))
+        assertEquals(File("C:/m"), pb.directory())
+        // Lo que el módulo escribe por su cuenta no va a la carpeta del programa (instalado no se puede escribir)
+        assertEquals(PreprocessModule.trabajo.path, pb.environment()["AGROSCAN_PREPROCESO_DATOS"])
+    }
+
+    // Las pruebas corren dentro del repositorio: se usa el código de preprocesamiento/, nunca un .exe empaquetado viejo
+    @Test fun programandoSeUsaElCodigoDelRepositorio() {
+        val anterior = System.getProperty("compose.application.resources.dir")
+        val recursos = Files.createTempDirectory("recursos").toFile()
+        try {
+            File(recursos, "agroscan-preproceso").mkdirs()
+            File(recursos, "agroscan-preproceso/agroscan-preproceso.exe").writeText("x")
+            System.setProperty("compose.application.resources.dir", recursos.path)
+            val r = PreprocessModule.ubicar()
+            val esperado = File(System.getProperty("user.dir")).absoluteFile.parentFile.resolve("preprocesamiento")
+            r.onSuccess { assertEquals(esperado, it.carpeta); assertEquals("main.py", it.programa.last()) }
+            r.onFailure { assertEquals(true, it.message!!.contains("prepararPreproceso")) }   // repositorio sin venv
+        } finally {
+            if (anterior == null) System.clearProperty("compose.application.resources.dir") else System.setProperty("compose.application.resources.dir", anterior)
+            recursos.deleteRecursively()
+        }
     }
 }

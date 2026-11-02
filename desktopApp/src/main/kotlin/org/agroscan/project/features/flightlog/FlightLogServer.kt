@@ -8,7 +8,9 @@ import org.agroscan.project.core.DataFolder
 import org.agroscan.project.core.EventLog
 import org.agroscan.project.core.MiniJson
 import org.agroscan.project.features.camera.CameraFeed
+import org.agroscan.project.features.login.Auth
 import org.agroscan.project.features.redlocal.LocalHotspot
+import org.agroscan.project.features.sync.HistorySync
 import java.io.File
 import java.net.InetAddress
 import java.nio.file.Files
@@ -25,6 +27,8 @@ import kotlin.concurrent.thread
  * - `POST /salidas/<uuid>` con el JSON de la salida y sus dos archivos → `{"ok":true,"nuevo":true|false}`.
  * - `POST /logs/enlace-pc-AAAA-MM-DD.log` con el registro del enlace del teléfono (texto) → se guarda en `logs\telefono\`
  *   (reemplaza al anterior del mismo día: el teléfono lo va completando). Sirve para revisar los cortes después de volar.
+ * - `POST /sync` con todo el historial del teléfono → base de datos ([HistorySync]), a nombre de quien tiene la sesión en la PC
+ *   (409 si nadie la tiene).
  *
  * Como la telemetría: el puerto se abre **solo en la IP de la zona móvil** y solo mientras la Red Local está encendida, y solo se
  * aceptan equipos de esa red. Lo que llega solo se guarda como texto (nunca se ejecuta), cada salida se escribe una sola vez y el
@@ -68,6 +72,7 @@ object FlightLogServer {
                         HttpServer.create(InetSocketAddress(address, PORT), 0).apply {
                             createContext("/salidas") { handle(it, store(), logsDir()) }
                             createContext("/logs") { handle(it, store(), logsDir()) }
+                            createContext("/sync") { handle(it, store(), logsDir()) }
                             // Vista previa de la cámara: mismo puerto para no pedir otro permiso del Firewall
                             createContext("/camara") { CameraFeed.handle(it) }
                             start()   // un solo hilo atiende: los envíos del teléfono van de a uno
@@ -98,6 +103,7 @@ object FlightLogServer {
                     reply(ex, 200, """{"salidas":[${store.received().joinToString(",") { "\"$it\"" }}]}""")
                 ex.requestMethod == "POST" && path.startsWith("/salidas/") -> receive(ex, store, path.removePrefix("/salidas/"))
                 ex.requestMethod == "POST" && path.startsWith("/logs/") -> receiveLog(ex, path.removePrefix("/logs/"), logsDir)
+                ex.requestMethod == "POST" && path == "/sync" -> receiveHistory(ex)
                 else -> reply(ex, 404, error("No existe"))
             }
         } catch (e: Exception) {
@@ -124,6 +130,24 @@ object FlightLogServer {
             "Salida ${info.indice + 1} de \"${info.mision}\" ${if (nuevo) "recibida (${eventos.lineSequence().count { "\"evento\":\"marca\"" in it }} marcas)" else "ya estaba: no se toca"}"
         )
         reply(ex, 200, """{"ok":true,"nuevo":$nuevo}""")
+    }
+
+    /** Historial del teléfono (lotes, misiones, vuelos, salidas) → base de datos, con [HistorySync]. */
+    private fun receiveHistory(ex: HttpExchange) {
+        val bytes = ex.requestBody.readNBytes(MAX_BODY + 1)
+        if (bytes.size > MAX_BODY) return reply(ex, 413, error("El historial es demasiado grande"))
+        val json = runCatching { MiniJson.parse(String(bytes, Charsets.UTF_8)) }.getOrNull() as? Map<*, *>
+            ?: return reply(ex, 400, error("El envío no es JSON válido"))
+        // Sin sesión no hay a nombre de quién guardarlo; no se pierde: el próximo envío trae todo otra vez
+        val usuario = Auth.usuario.value ?: return reply(ex, 409, error("Nadie inició sesión en la PC"))
+        val r = try {
+            HistorySync.guardar(json, usuario.id)
+        } catch (e: IllegalArgumentException) {
+            EventLog.log("historial", "Rechazado: ${e.message}")
+            return reply(ex, 400, error("Historial no válido: ${e.message}"))
+        }
+        EventLog.log("historial", "Guardado en la base: ${r.lotes} lote(s), ${r.misiones} misión(es), ${r.vuelos} vuelo(s), ${r.salidas} salida(s)")
+        reply(ex, 200, """{"ok":true,"lotes":${r.lotes},"misiones":${r.misiones},"vuelos":${r.vuelos},"salidas":${r.salidas}}""")
     }
 
     /** Nombre de los registros del enlace que manda el teléfono: nada de rutas, solo este formato. */

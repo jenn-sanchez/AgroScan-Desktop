@@ -101,6 +101,33 @@ En **Procesamiento → Importar desde la microSD** (`features/flightlog/VideoImp
 - Se copia a un `.part` y se renombra al final, así que sacar la tarjeta a mitad nunca deja un video incompleto con el nombre final. Si se interrumpe, el video se vuelve a copiar entero (no se reanuda).
 - Velocidad: la limita sobre todo el lector y el puerto USB (un lector USB 2 da ~30 MB/s; USB 3, 80–90 MB/s o más), la tarjeta, y el antivirus (Windows Defender revisa cada video grande al leerlo y escribirlo).
 
+### Preprocesamiento de imágenes (módulo de Python)
+
+En **Procesamiento → Vuelos recibidos**, cada salida que ya tiene su video tiene el botón **Preprocesar**. La app ejecuta por
+detrás el módulo [`agroscan-preprocesamiento`](https://github.com/jeffersonagm/agroscan-preprocesamiento) (de Jefferson): saca del
+video los cuadros para el mosaico (con 75 % de solape), revisa su calidad y corrige solo lo necesario. **Todo en esta PC, sin
+internet ni servidor**; sigue aunque se cambie de pestaña y se puede cancelar. Ver
+[`features/preproceso/Preprocesamiento.kt`](./desktopApp/src/main/kotlin/org/agroscan/project/features/preproceso/Preprocesamiento.kt).
+
+- **Resultados:** `salida-N\preproceso\<video>\imagenes_procesadas\` (y `frames_originales\`). Cada video de la salida va a su
+  propia carpeta, porque el módulo borra lo que hay en su carpeta al empezar y el dron parte los videos largos.
+- **Cómo lo usa la app:** `main.py --video … --salida … --mision … --json` (el contrato del README del módulo). Lee el avance línea a
+  línea; el registro detallado del módulo queda en `logs\preproceso-AAAA-MM-DD.log`. **No** se le pasa `--servidor`: no se envía nada.
+- **Instalar el módulo (por ahora, en cada PC):**
+  ```
+  cd %USERPROFILE%\Documents
+  git clone https://github.com/jeffersonagm/agroscan-preprocesamiento.git
+  cd agroscan-preprocesamiento
+  python -m venv venv
+  venv\Scripts\python.exe -m pip install -r requirements.txt
+  ```
+  Las versiones fijas del módulo piden **Python 3.12 o más nuevo**; con Python 3.11 instalar sin versiones fijas:
+  `venv\Scripts\python.exe -m pip install opencv-python numpy pillow requests ExifRead`.
+  La app lo busca en `Documentosgroscan-preprocesamiento` y usa su `venv`; otra carpeta se elige en la tarjeta
+  "Preprocesamiento de imágenes" → **Cambiar…**.
+- **Pendiente:** empaquetar el módulo como .exe dentro del instalador (para no instalar Python en cada PC) y que las imágenes lleven
+  GPS (el módulo hoy no sabe dónde estaba el dron; la PC tiene `registro.csv` y la hora de inicio del video en `salida.json`).
+
 ### Estructura de la app de escritorio
 
 `desktopApp/src/main/kotlin/org/agroscan/project/`:
@@ -108,7 +135,7 @@ En **Procesamiento → Importar desde la microSD** (`features/flightlog/VideoImp
 | Carpeta | Contiene |
 |---|---|
 | `core/` | Solo infraestructura compartida: la conexión a la base (`Database.kt`; cambiar de base no toca las consultas), la carpeta de datos (`DataFolder.kt`), el registro de eventos (`EventLog.kt`) y el lector de JSON (`MiniJson.kt`) |
-| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad: `login`, `home`, `telemetry` (telemetría en vivo y medida de la señal), `flightlog` (registros de vuelo e importación de videos), `camera` (vista previa de la cámara), `redlocal` (zona móvil y Firewall) |
+| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad: `login`, `home`, `telemetry` (telemetría en vivo y medida de la señal), `flightlog` (registros de vuelo e importación de videos), `camera` (vista previa de la cámara), `preproceso` (ejecuta el módulo de preprocesamiento), `redlocal` (zona móvil y Firewall) |
 | `ui/` | Solo diseño (Compose): llama a `features`, nunca a SQL directamente |
 
 ### Running the apps

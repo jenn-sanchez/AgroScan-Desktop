@@ -48,15 +48,27 @@ todavía no llegan a la base. Para instalarla en una PC nueva, ver también la s
 - **Instalador (.exe):** el Java recortado del instalador necesita el módulo `java.management` para el driver de PostgreSQL (ya está
   en `desktopApp/build.gradle.kts`). Sin él el `.exe` dice "BD sin conexión" aunque todo esté bien configurado.
 
+### Dónde está la variable `AGROSCAN_DB_URL`
+No está en ningún archivo del proyecto (por eso no llega a GitHub): es una variable de entorno **de tu usuario de Windows**.
+- Verla o cambiarla: menú Inicio → buscar "variables de entorno" → **Editar las variables de entorno de esta cuenta** → en
+  "Variables de usuario" aparece `AGROSCAN_DB_URL`.
+- Verla desde una terminal: `echo %AGROSCAN_DB_URL%` (cmd) o `$env:AGROSCAN_DB_URL` (PowerShell). Muestra la contraseña.
+- Cada PC tiene la suya, con su propia base y su propia contraseña.
+
 ### Instalar la base en una PC nueva
-1. Instalar PostgreSQL 16 con PostGIS (Stack Builder → Spatial Extensions → PostGIS).
-2. Crear la base y cargar el esquema:
+1. Instalar **PostgreSQL 16** (instalador de EDB, apuntar la contraseña del usuario `postgres`) y, al final, **Stack Builder →
+   Spatial Extensions → PostGIS**.
+2. Crear la base y cargar el esquema. Con **pgAdmin** (lo trae PostgreSQL): clic derecho en *Databases* → *Create → Database* →
+   nombre `dron_control`; después clic derecho en `dron_control` → *Query Tool* → abrir `database/dron_control.sql` → ejecutar (F5).
+   O desde una terminal (en Windows `psql` no está en el PATH: va la ruta completa):
    ```
-   createdb -U postgres dron_control
-   psql -U postgres -d dron_control -f database/dron_control.sql
+   "C:\Program Files\PostgreSQL\16\bin\createdb.exe" -U postgres dron_control
+   "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -d dron_control -f database\dron_control.sql
    ```
-   En una base creada antes de algún cambio, aplicar en orden los `database/00N_*.sql` que falten.
-3. Crear `AGROSCAN_DB_URL` (arriba) y reiniciar el IDE, o abrir la app instalada.
+   `dron_control.sql` ya trae todos los cambios. Los `database/00N_*.sql` solo son para una base creada antes de ese cambio.
+3. Crear `AGROSCAN_DB_URL` con **la contraseña de esa PC** (arriba) y reiniciar IntelliJ (o abrir la app instalada).
+4. Abrir AgroScan: arriba debe decir **"BD local: dron_control"**. La base está vacía: hay que **registrarse** (crear una cuenta
+   con la cédula) antes de entrar.
 
 ## 3. Qué usa la app hoy
 

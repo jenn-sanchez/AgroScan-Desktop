@@ -26,13 +26,16 @@ import org.agroscan.project.core.DataFolder
 import org.agroscan.project.features.flightlog.FlightLogServer
 import org.agroscan.project.features.flightlog.FlightLogStore
 import org.agroscan.project.features.flightlog.VideoImport
+import org.agroscan.project.features.preproceso.PreprocessModule
+import org.agroscan.project.features.preproceso.Preprocesamiento
 import java.awt.Desktop
 import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.UIManager
+import javax.swing.filechooser.FileNameExtensionFilter
 
-/** Una salida tal como se ve en la lista: lo que ya llegó del teléfono y de la microSD. */
-private data class SalidaVista(val numero: String, val marcas: Int, val videos: Int)
+/** Una salida tal como se ve en la lista: lo que ya llegó del teléfono y de la microSD, y las imágenes ya preprocesadas. */
+private data class SalidaVista(val numero: String, val marcas: Int, val videos: Int, val imagenes: Int, val stored: FlightLogStore.Stored)
 private data class VueloVista(val carpeta: String, val salidas: List<SalidaVista>)
 
 /**
@@ -46,7 +49,8 @@ fun ProcesamientoUi() {
     var refresco by remember { mutableStateOf(0) }
     // La lista se vuelve a leer cuando termina (o empieza) una importación: la copia sigue aunque se cambie de pestaña
     val importando = VideoImport.estado.collectAsState().value.activo
-    val vuelos by produceState(emptyList<VueloVista>(), carpeta, recibido, refresco, importando) {
+    val preprocesando = Preprocesamiento.estado.collectAsState().value.activo
+    val vuelos by produceState(emptyList<VueloVista>(), carpeta, recibido, refresco, importando, preprocesando) {
         value = withContext(Dispatchers.IO) { leerVuelos() }
     }
 
@@ -67,6 +71,7 @@ fun ProcesamientoUi() {
         ) {
             CarpetaCard(carpeta)
             ImportarCard()
+            PreprocesoCard()
             VuelosCard(vuelos) { refresco++ }
         }
     }
@@ -154,9 +159,87 @@ private fun ImportarCard() = Card(Modifier.fillMaxWidth()) {
     }
 }
 
+/**
+ * Preprocesamiento de imágenes (módulo de Python `agroscan-preprocesamiento`): saca del video los cuadros para el mosaico, revisa su
+ * calidad y corrige solo lo necesario. Se ejecuta por detrás en esta PC, sin internet ni servidor; sigue aunque se cambie de pestaña.
+ */
+@Composable
+private fun PreprocesoCard() = Card(Modifier.fillMaxWidth()) {
+    val estado by Preprocesamiento.estado.collectAsState()
+    val modulo by PreprocessModule.folder.collectAsState()
+    val problema = remember(modulo) { PreprocessModule.problema(modulo) }
+
+    Titulo(Icons.Filled.AutoAwesome, "Preprocesamiento de imágenes")
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "Extrae del video los cuadros necesarios para el mosaico, analiza su calidad, corrige solo lo necesario y guarda las imágenes " +
+            "con sus metadatos. Todo en esta PC, sin internet. Elige una salida con video en «Vuelos recibidos» y pulsa Preprocesar.",
+        fontSize = 11.sp, color = TextMuted
+    )
+    Spacer(Modifier.height(10.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Módulo: ", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextDark)
+        Text(modulo.absolutePath, Modifier.weight(1f), fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        TextButton(onClick = { elegirCarpeta("Carpeta del módulo de preprocesamiento", modulo)?.let(PreprocessModule::set) }, enabled = !estado.activo) {
+            Text("Cambiar…", color = Green)
+        }
+    }
+    problema?.let { Text(it, fontSize = 11.sp, color = Color(0xFFDC2626)) }
+
+    if (estado.titulo.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text(
+            buildString {
+                append(estado.titulo)
+                if (estado.videos > 0) append(" · video ${estado.video} de ${estado.videos}")
+                if (estado.nombreVideo.isNotEmpty()) append(" · ${estado.nombreVideo}")
+            },
+            fontSize = 12.sp, color = TextDark
+        )
+        estado.resultados?.let { Text("Resultados en: ${it.absolutePath}", fontSize = 11.sp, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        Spacer(Modifier.height(10.dp))
+        Text(estado.etapa, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextDark)
+        Spacer(Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { estado.porcentaje / 100f }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
+            color = Green, trackColor = Color(0xFFE5E7EB), drawStopIndicator = {}
+        )
+        Text("${estado.porcentaje} %", Modifier.align(Alignment.End), fontSize = 11.sp, color = TextMuted)
+        estado.resumen?.takeUnless { estado.activo }?.let { r ->
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip(true, "${r.imagenes} imágenes")
+                Chip(true, "${r.modificadas} modificadas")
+                Chip(true, "${r.conAdvertencias} con advertencias")
+                if (r.conPendientes > 0) Chip(false, "${r.conPendientes} con problemas pendientes")
+                if (r.sinRecorrido > 0) Chip(false, "${r.sinRecorrido} video(s) sin recorrido detectado")
+            }
+        }
+        estado.error?.let {
+            Spacer(Modifier.height(6.dp))
+            Text("Error: $it", fontSize = 11.sp, color = Color(0xFFDC2626))
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (estado.activo) {
+            TextButton(onClick = Preprocesamiento::cancelar) { Text("Cancelar", color = Color(0xFFDC2626)) }
+        } else {
+            estado.resultados?.takeIf { it.isDirectory }?.let { dir ->
+                OutlinedButton(onClick = { runCatching { Desktop.getDesktop().open(dir) } }) { Text("Abrir carpeta de resultados", color = TextDark) }
+            }
+            // Para un video que no vino de una misión: sus resultados van a <carpeta de datos>\preproceso\<video>
+            OutlinedButton(onClick = {
+                elegirVideo()?.let { v -> Preprocesamiento.iniciar(listOf(v), File(DataFolder.current.value, "preproceso"), v.nameWithoutExtension, v.name) }
+            }, enabled = problema == null) { Text("Elegir video…", color = TextDark) }
+        }
+    }
+}
+
 @Composable
 private fun VuelosCard(vuelos: List<VueloVista>, onRefrescar: () -> Unit) = Card(Modifier.fillMaxWidth()) {
     val error by FlightLogServer.error.collectAsState()
+    val preprocesando = Preprocesamiento.estado.collectAsState().value.activo
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) { Titulo(Icons.Filled.FlightTakeoff, "Vuelos recibidos") }
         TextButton(onClick = onRefrescar) { Text("Actualizar", color = Green) }
@@ -178,6 +261,16 @@ private fun VuelosCard(vuelos: List<VueloVista>, onRefrescar: () -> Unit) = Card
                     Chip(true, "Registro · ${s.marcas} marcas")
                     Spacer(Modifier.width(6.dp))
                     Chip(s.videos > 0, if (s.videos > 0) "Video · ${s.videos} archivo(s)" else "Falta el video")
+                    if (s.imagenes > 0) {
+                        Spacer(Modifier.width(6.dp))
+                        Chip(true, "Preprocesada · ${s.imagenes} imágenes")
+                    }
+                    if (s.videos > 0) {
+                        Spacer(Modifier.width(6.dp))
+                        TextButton(onClick = { Preprocesamiento.iniciar(s.stored) }, enabled = !preprocesando, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Text(if (s.imagenes > 0) "Volver a preprocesar" else "Preprocesar", fontSize = 11.sp, color = Green)
+                        }
+                    }
                 }
             }
         }
@@ -202,10 +295,22 @@ private fun leerVuelos(): List<VueloVista> =
                 SalidaVista(
                     s.dir.name.replaceFirstChar { it.uppercase() }.replace('-', ' '),
                     FlightLogStore.marcas(s.eventos),
-                    s.videoDir.listFiles { f -> f.extension.equals("mp4", ignoreCase = true) }?.size ?: 0
+                    s.videoDir.listFiles { f -> f.extension.equals("mp4", ignoreCase = true) }?.size ?: 0,
+                    Preprocesamiento.imagenesListas(Preprocesamiento.carpeta(s)),
+                    s
                 )
             })
         }
+
+/** Diálogo de Windows para elegir un video MP4; null si se cancela. */
+private fun elegirVideo(): File? {
+    runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
+    val chooser = JFileChooser().apply {
+        dialogTitle = "Video para preprocesar"
+        fileFilter = FileNameExtensionFilter("Videos MP4", "mp4")
+    }
+    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+}
 
 /**
  * Diálogo de Windows para elegir una carpeta; null si se cancela. Con [mostrarArchivos] también lista los archivos (para ver que es

@@ -27,40 +27,46 @@ tasks.test {
     systemProperty("agroscan.eventlog", "off")
 }
 
-// Módulo de preprocesamiento de imágenes (Python, en preprocesamiento/). Programando, la app usa su código con el Python de su venv;
-// el instalador lo lleva convertido en agroscan-preproceso.exe, con su Python y librerías: quien instala no necesita Python.
-// shortcut: solo Windows (venv\Scripts, .exe); para Mac/Linux habría que empaquetarlo en cada sistema.
-val preproceso: Directory = rootProject.layout.projectDirectory.dir("preprocesamiento")
-val preprocesoRecursos: Provider<Directory> = layout.buildDirectory.dir("preproceso")
+// Módulos de Python que usa la app: preprocesamiento de imágenes (preprocesamiento/) y armado de ortomosaicos (ortomosaico/). Programando,
+// la app usa su código con el Python de su venv; el instalador los lleva convertidos en agroscan-preproceso.exe y agroscan-ortomosaico.exe,
+// con su Python y librerías: quien instala no necesita Python.
+// shortcut: solo Windows (venv\Scripts, .exe); para Mac/Linux habría que empaquetarlos en cada sistema.
+val modulosRecursos: Provider<Directory> = layout.buildDirectory.dir("modulos")
 
-val prepararPreproceso by tasks.registering(Exec::class) {
-    group = "agroscan"
-    description = "Crea preprocesamiento/venv con Python 3.12, las librerías del módulo y PyInstaller"
-    workingDir(preproceso)
-    commandLine("cmd", "/c", "py -3.12 -m venv venv && venv\\Scripts\\python -m pip install --disable-pip-version-check -r requirements.txt pyinstaller==6.22.3")
+/** Registra las tareas de un módulo de Python: crear su venv (`preparar<Nombre>`) y empaquetarlo como .exe (`empaquetar<Nombre>`). */
+fun moduloPython(carpeta: String, nombre: String, exe: String, descripcion: String): TaskProvider<Exec> {
+    val dir: Directory = rootProject.layout.projectDirectory.dir(carpeta)
+    val preparar = tasks.register<Exec>("preparar$nombre") {
+        group = "agroscan"
+        description = "Crea $carpeta/venv con Python 3.12, las librerías del módulo de $descripcion y PyInstaller"
+        workingDir(dir)
+        commandLine("cmd", "/c", "py -3.12 -m venv venv && venv\\Scripts\\python -m pip install --disable-pip-version-check -r requirements.txt pyinstaller==6.22.3")
+    }
+    return tasks.register<Exec>("empaquetar$nombre") {
+        group = "agroscan"
+        description = "Convierte el módulo de $descripcion en $exe.exe para meterlo en el instalador"
+        dependsOn(preparar)
+        inputs.files(dir.file("main.py"), dir.file("requirements.txt"), dir.dir("src").asFileTree.matching { include("**/*.py") })
+        outputs.dir(modulosRecursos.map { it.dir("windows/$exe") })
+        workingDir(dir)
+        // En recursos/windows: Compose lo copia a los recursos de la app (compose.application.resources.dir, ver ModuloPython).
+        // UTF-8 fijo: el .exe no lee PYTHONIOENCODING y su registro saldría con las tildes rotas.
+        commandLine(
+            dir.file("venv/Scripts/python.exe").asFile, "-m", "PyInstaller", "--noconfirm", "--name", exe,
+            "--python-option", "X utf8",
+            "--distpath", modulosRecursos.get().dir("windows").asFile, "--workpath", temporaryDir, "--specpath", temporaryDir, "main.py"
+        )
+    }
 }
 
-val empaquetarPreproceso by tasks.registering(Exec::class) {
-    group = "agroscan"
-    description = "Convierte el módulo en agroscan-preproceso.exe para meterlo en el instalador"
-    dependsOn(prepararPreproceso)
-    inputs.files(preproceso.file("main.py"), preproceso.file("requirements.txt"), preproceso.dir("src").asFileTree.matching { include("**/*.py") })
-    outputs.dir(preprocesoRecursos)
-    workingDir(preproceso)
-    // En recursos/windows: Compose lo copia a los recursos de la app (compose.application.resources.dir, ver PreprocessModule).
-    // UTF-8 fijo: el .exe no lee PYTHONIOENCODING y su registro saldría con las tildes rotas.
-    commandLine(
-        preproceso.file("venv/Scripts/python.exe").asFile, "-m", "PyInstaller", "--noconfirm", "--name", "agroscan-preproceso",
-        "--python-option", "X utf8",
-        "--distpath", preprocesoRecursos.get().dir("windows").asFile, "--workpath", temporaryDir, "--specpath", temporaryDir, "main.py"
-    )
-}
+val empaquetarPreproceso = moduloPython("preprocesamiento", "Preproceso", "agroscan-preproceso", "preprocesamiento")
+val empaquetarOrtomosaico = moduloPython("ortomosaico", "Ortomosaico", "agroscan-ortomosaico", "ortomosaicos")
 
 // Solo al armar la app instalable, no en cada ./gradlew run (que también copia los recursos). Como entrada y no solo dependencia:
 // Compose no revisa si cambiaron los recursos y dejaría el .exe viejo en el instalador.
-val conPreproceso = setOf("createDistributable", "createReleaseDistributable", "packageMsi", "packageReleaseMsi")
-tasks.matching { it.name in conPreproceso }.configureEach { inputs.files(empaquetarPreproceso) }
-tasks.matching { it.name == "prepareAppResources" }.configureEach { mustRunAfter(empaquetarPreproceso) }
+val conModulos = setOf("createDistributable", "createReleaseDistributable", "packageMsi", "packageReleaseMsi")
+tasks.matching { it.name in conModulos }.configureEach { inputs.files(empaquetarPreproceso, empaquetarOrtomosaico) }
+tasks.matching { it.name == "prepareAppResources" }.configureEach { mustRunAfter(empaquetarPreproceso, empaquetarOrtomosaico) }
 
 compose.desktop {
     application {
@@ -76,7 +82,7 @@ compose.desktop {
             // del JDK, revisar con ./gradlew :desktopApp:suggestRuntimeModules o el .exe fallará al usarla.
             // java.management no lo detecta esa tarea, pero el driver de PostgreSQL lo usa al conectarse.
             modules("java.instrument", "java.management", "java.prefs", "java.sql", "jdk.httpserver", "jdk.unsupported")
-            appResourcesRootDir.set(preprocesoRecursos)
+            appResourcesRootDir.set(modulosRecursos)
             windows {
                 iconFile.set(project.file("icons/icon.ico"))
                 menu = true       // acceso en el menú Inicio

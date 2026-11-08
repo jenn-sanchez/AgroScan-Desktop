@@ -24,6 +24,12 @@ object DataFolder {
     /** `<carpeta>\vuelos`: una subcarpeta por vuelo. */
     val vuelos: File get() = File(current.value, "vuelos")
 
+    /**
+     * `<carpeta>\ortomosaicos`: una subcarpeta por lote y, dentro, una por vuelo. Va aparte de `vuelos` a propósito: los videos pesan
+     * GB y se borran para liberar disco, pero el historial del cultivo (los ortomosaicos de cada fecha) tiene que quedar.
+     */
+    val ortomosaicos: File get() = File(current.value, "ortomosaicos")
+
     fun set(dir: File) {
         prefs.put(CLAVE, dir.absolutePath)
         prefs.flush()

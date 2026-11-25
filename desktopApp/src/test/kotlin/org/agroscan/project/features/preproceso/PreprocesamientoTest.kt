@@ -1,5 +1,6 @@
 package org.agroscan.project.features.preproceso
 
+import org.agroscan.project.core.ModuloPython
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -67,7 +68,7 @@ class PreprocesamientoTest {
 
     @Test fun elComandoNoEnviaANingunServidor() {
         val pb = PreprocessModule.proceso(
-            PreprocessModule.Modulo(listOf("python.exe", "main.py"), File("C:/m")), File("C:/v/DJI_0001.MP4"), File("C:/s"), "vuelo_salida-1"
+            ModuloPython(listOf("python.exe", "main.py"), File("C:/m")), File("C:/v/DJI_0001.MP4"), File("C:/s"), "vuelo_salida-1"
         )
         assertEquals(
             listOf("python.exe", "main.py", "--video", File("C:/v/DJI_0001.MP4").path, "--salida", File("C:/s").path, "--mision", "vuelo_salida-1", "--json"),

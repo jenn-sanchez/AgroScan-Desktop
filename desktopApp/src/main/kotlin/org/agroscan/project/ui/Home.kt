@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.agroscan.project.core.Navegacion
 import org.agroscan.project.features.login.Auth
 import org.agroscan.project.core.Database
 import org.agroscan.project.features.home.HomeData
@@ -52,11 +53,12 @@ internal val TextDark = Color(0xFF111827)
 private data class NavItem(val label: String, val icon: ImageVector)
 
 private val navItems = listOf(
-    NavItem("Inicio", Icons.Filled.Home),
+    NavItem(Navegacion.INICIO, Icons.Filled.Home),
     NavItem("Perímetro", Icons.Filled.Map),
     NavItem("Planificación", Icons.Filled.Architecture),
     NavItem("Telemetría", Icons.Filled.SettingsInputAntenna),
-    NavItem("Procesamiento", Icons.Filled.Memory),
+    NavItem(Navegacion.PROCESAMIENTO, Icons.Filled.Memory),
+    NavItem(Navegacion.ORTOMOSAICOS, Icons.Filled.Layers),
     NavItem("Resultados", Icons.Filled.Assessment),
     NavItem("Red Local", Icons.Filled.Lan),
 )
@@ -77,15 +79,18 @@ private fun estadoTexto(estado: String?) = when (estado) {
 @Composable
 fun Home() {
     val usuario by Auth.usuario.collectAsState()
-    var selected by remember { mutableStateOf(0) }
+    // La pantalla elegida vive en Navegacion: así Procesamiento puede llevar a Ortomosaicos y al volver se sigue donde se dejó
+    val pantalla by Navegacion.pantalla.collectAsState()
+    val selected = navItems.indexOfFirst { it.label == pantalla }.coerceAtLeast(0)
     Row(Modifier.fillMaxSize().background(ContentBg)) {
-        Sidebar(selected) { selected = it }
+        Sidebar(selected) { Navegacion.ir(navItems[it].label) }
         // Sin sesión, cualquier opción muestra el login: los datos de cada pantalla son del usuario que entró.
         if (usuario == null) LoginUi()
         else key(usuario?.id) {
             when (navItems[selected].label) {
                 "Telemetría" -> TelemetriaUi()
-                "Procesamiento" -> ProcesamientoUi()
+                Navegacion.PROCESAMIENTO -> ProcesamientoUi()
+                Navegacion.ORTOMOSAICOS -> OrtomosaicosUi()
                 "Red Local" -> RedLocalUi()
                 else -> Column(Modifier.fillMaxSize()) {
                     TopBar()

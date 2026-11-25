@@ -76,6 +76,7 @@ No está en ningún archivo del proyecto (por eso no llega a GitHub): es una var
 |---|---|---|
 | Iniciar sesión y registrarse (cédula única) | `usuario` | [`features/login/Auth.kt`](../desktopApp/src/main/kotlin/org/agroscan/project/features/login/Auth.kt) |
 | Inicio: hectáreas escaneadas, vuelos del mes, misiones recientes (solo las del usuario con sesión: `creado_por`) | `lote`, `mision`, `parametros_vuelo`, `vuelo` | [`features/home/HomeData.kt`](../desktopApp/src/main/kotlin/org/agroscan/project/features/home/HomeData.kt) |
+| Ortomosaicos: lotes del usuario, contorno del lote para el visor, y alta/baja del índice de cada ortomosaico | `ortomosaico`, `lote`, `vertice` | [`features/ortomosaico/OrtomosaicoDb.kt`](../desktopApp/src/main/kotlin/org/agroscan/project/features/ortomosaico/OrtomosaicoDb.kt) |
 | Telemetría: misión en curso según la base (si no llega la del teléfono en vivo) | `vuelo`, `mision`, `lote` | [`features/telemetry/TelemetryData.kt`](../desktopApp/src/main/kotlin/org/agroscan/project/features/telemetry/TelemetryData.kt) |
 
 Tablas que existen pero ninguna pantalla escribe todavía: `lote`, `vertice`, `parametros_vuelo`, `mision`, `vuelo`, `salida`,
@@ -96,6 +97,10 @@ no se duplica aunque llegue varias veces o desde otra PC.
 | `mision` | El plan de un lote | `lote_id`, `parametros_id`, `nombre`, `estado` (`BORRADOR`, `SINCRONIZADO`, `COMPLETADO`), `ruta_waypoints` (jsonb), `creado_por` |
 | `vuelo` | Una ejecución de la misión | `mision_id`, `estado` (`EN_CURSO`, `COMPLETADO`, `INTERRUMPIDO`), `inicio`, `fin`, `perimetro_volado`, `ruta_volada` (jsonb), `siguiente_waypoint`, `iniciado_por` |
 | `salida` | Un despegue (una batería) | `vuelo_id`, `indice`, `desde_wp`, `hasta_wp`, `estado`, `motivo`, `inicio_ms`, `fin_ms`, `bateria_inicio/fin`, `video_inicio_ms/fin_ms`, `distancia_m`, `operador_id`, `dispositivo_id` |
+| `ortomosaico` | Índice de los ortomosaicos creados (migración `002_ortomosaico.sql`) | `vuelo_id` (único: un ortomosaico por vuelo; se borra con el vuelo), `lote_id`, `creado_por`, `estado` (`PROCESANDO`, `LISTO`, `ERROR`, `CANCELADO`, `INTERRUMPIDO`), `motor`, `calidad`, `imagenes_usadas/total`, `cobertura_pct`, `area_ha`, `gsd_cm_px`, `crs`, `limites` (PostGIS Polygon 4326), `error_estimado_m`, `tamano_bytes`, `creado_en`, `terminado_en` |
+
+Los ortomosaicos en sí (imágenes de GB) **no** van a la base: la tabla solo los indexa para listarlos por lote y fecha. La fuente de
+verdad son los archivos (`ortomosaico.json` en cada carpeta); si la base no responde, la biblioteca se sigue viendo.
 
 ## 5. Lo que no va a la base (y por qué)
 

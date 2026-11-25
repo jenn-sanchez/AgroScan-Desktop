@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.agroscan.project.core.DataFolder
+import org.agroscan.project.core.Navegacion
 import org.agroscan.project.features.flightlog.FlightLogServer
 import org.agroscan.project.features.flightlog.FlightLogStore
 import org.agroscan.project.features.flightlog.VideoImport
@@ -36,7 +38,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
 
 /** Una salida tal como se ve en la lista: lo que ya llegó del teléfono y de la microSD, y las imágenes ya preprocesadas. */
 private data class SalidaVista(val numero: String, val marcas: Int, val videos: Int, val imagenes: Int, val stored: FlightLogStore.Stored)
-private data class VueloVista(val carpeta: String, val salidas: List<SalidaVista>)
+private data class VueloVista(val carpeta: String, val vueloUuid: String, val salidas: List<SalidaVista>)
 
 /**
  * Lo que necesita el procesamiento de cada vuelo: dónde se guarda, importar los videos de la microSD y qué salidas ya tienen su
@@ -78,7 +80,7 @@ fun ProcesamientoUi() {
 }
 
 @Composable
-private fun Titulo(icon: ImageVector, texto: String) {
+internal fun Titulo(icon: ImageVector, texto: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, Modifier.size(18.dp), tint = Green)
         Spacer(Modifier.width(8.dp))
@@ -220,6 +222,9 @@ private fun PreprocesoCard() = Card(Modifier.fillMaxWidth()) {
         if (estado.activo) {
             TextButton(onClick = Preprocesamiento::cancelar) { Text("Cancelar", color = Color(0xFFDC2626)) }
         } else {
+            if (estado.vueloUuid != null && estado.error == null && !estado.cancelado && (estado.resumen?.imagenes ?: 0) > 0) {
+                CrearOrtomosaicoBoton(estado.vueloUuid!!)
+            }
             estado.resultados?.takeIf { it.isDirectory }?.let { dir ->
                 OutlinedButton(onClick = { runCatching { Desktop.getDesktop().open(dir) } }) { Text("Abrir carpeta de resultados", color = TextDark) }
             }
@@ -249,7 +254,13 @@ private fun VuelosCard(vuelos: List<VueloVista>, onRefrescar: () -> Unit) = Card
     vuelos.forEach { v ->
         HorizontalDivider(color = Border)
         Column(Modifier.padding(vertical = 8.dp)) {
-            Text(v.carpeta, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    v.carpeta, Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextDark,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                if (v.salidas.any { it.imagenes > 0 }) CrearOrtomosaicoBoton(v.vueloUuid)
+            }
             v.salidas.forEach { s ->
                 Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(s.numero, Modifier.width(110.dp), fontSize = 11.sp, color = TextDark)
@@ -272,8 +283,22 @@ private fun VuelosCard(vuelos: List<VueloVista>, onRefrescar: () -> Unit) = Card
     }
 }
 
+/** «Crear ortomosaico →»: lleva a Ortomosaicos → Crear con ese vuelo ya elegido. No ejecuta nada: allí se revisa y se arma. */
 @Composable
-private fun Chip(ok: Boolean, texto: String) {
+private fun CrearOrtomosaicoBoton(vueloUuid: String) {
+    Button(
+        onClick = { Navegacion.crearOrtomosaico(vueloUuid) },
+        shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Green),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Text("Crear ortomosaico", fontSize = 12.sp)
+        Spacer(Modifier.width(6.dp))
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(14.dp))
+    }
+}
+
+@Composable
+internal fun Chip(ok: Boolean, texto: String) {
     Text(
         texto,
         Modifier.clip(RoundedCornerShape(50)).background(if (ok) SelectedBg else Color(0xFFFEF3C7)).padding(horizontal = 8.dp, vertical = 2.dp),
@@ -286,7 +311,7 @@ private fun leerVuelos(): List<VueloVista> =
         .groupBy { it.dir.parentFile }
         .entries.sortedByDescending { it.key.name }
         .map { (vuelo, salidas) ->
-            VueloVista(vuelo.name, salidas.sortedBy { it.info.indice }.map { s ->
+            VueloVista(vuelo.name, salidas.first().info.vueloUuid, salidas.sortedBy { it.info.indice }.map { s ->
                 SalidaVista(
                     s.dir.name.replaceFirstChar { it.uppercase() }.replace('-', ' '),
                     FlightLogStore.marcas(s.eventos),

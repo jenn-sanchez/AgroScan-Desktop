@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.agroscan.project.core.EventLog
 import org.agroscan.project.core.MiniJson
+import org.agroscan.project.core.ModuloPython
 import org.agroscan.project.features.flightlog.FlightLogStore
 import java.io.File
 import java.time.LocalDate
@@ -52,7 +53,9 @@ object Preprocesamiento {
         val etapa: String = "",
         val resumen: Resumen? = null,
         val error: String? = null,
-        val cancelado: Boolean = false
+        val cancelado: Boolean = false,
+        /** UUID del vuelo que se procesa; null si es un video suelto. Con él, al terminar, se puede ofrecer «Crear ortomosaico». */
+        val vueloUuid: String? = null
     )
 
     private val _estado = MutableStateFlow(Estado())
@@ -67,6 +70,10 @@ object Preprocesamiento {
         Runtime.getRuntime().addShutdownHook(Thread { proceso?.destroyForcibly() })
     }
 
+    /** Dentro de la carpeta de cada video: los cuadros tal como salieron del video, y los ya corregidos por el módulo. */
+    const val ORIGINALES = "frames_originales"
+    const val CORREGIDAS = "imagenes_procesadas"
+
     /** Carpeta de resultados de una salida. */
     fun carpeta(salida: FlightLogStore.Stored): File = File(salida.dir, "preproceso")
 
@@ -74,21 +81,21 @@ object Preprocesamiento {
     fun iniciar(salida: FlightLogStore.Stored) {
         val videos = salida.videoDir.listFiles { f -> f.extension.equals("mp4", ignoreCase = true) }?.sortedBy { it.name }.orEmpty()
         val vuelo = salida.dir.parentFile.name
-        iniciar(videos, carpeta(salida), "${vuelo}_${salida.dir.name}", "${salida.info.lote} · Salida ${salida.info.indice + 1}")
+        iniciar(videos, carpeta(salida), "${vuelo}_${salida.dir.name}", "${salida.info.lote} · Salida ${salida.info.indice + 1}", salida.info.vueloUuid)
     }
 
     /** Preprocesa [videos]: cada uno en `<resultados>\<nombre del video>\`. No hace nada si ya hay uno en marcha. */
-    fun iniciar(videos: List<File>, resultados: File, mision: String, titulo: String) {
+    fun iniciar(videos: List<File>, resultados: File, mision: String, titulo: String, vueloUuid: String? = null) {
         if (_estado.value.activo) return
         val ubicado = PreprocessModule.ubicar()
         val problema = ubicado.exceptionOrNull()?.message ?: if (videos.isEmpty()) "No hay videos para procesar" else null
         if (problema != null) {
-            _estado.value = Estado(titulo = titulo, resultados = resultados, error = problema)
+            _estado.value = Estado(titulo = titulo, resultados = resultados, error = problema, vueloUuid = vueloUuid)
             return
         }
         val modulo = ubicado.getOrThrow()
         cancelar = false
-        _estado.value = Estado(activo = true, titulo = titulo, resultados = resultados, videos = videos.size, etapa = "Preparando video")
+        _estado.value = Estado(activo = true, titulo = titulo, resultados = resultados, videos = videos.size, etapa = "Preparando video", vueloUuid = vueloUuid)
         EventLog.log("preproceso", "Inicio: $titulo · ${videos.size} video(s) · módulo: ${modulo.programa.joinToString(" ")} en ${modulo.carpeta}")
         scope.launch {
             var total = Resumen()
@@ -122,7 +129,7 @@ object Preprocesamiento {
     }
 
     /** Ejecuta el módulo con un video y devuelve su resumen (o el error que informó). */
-    private fun procesar(modulo: PreprocessModule.Modulo, video: File, salida: File, mision: String, i: Int, n: Int): Result<Resumen> {
+    private fun procesar(modulo: ModuloPython, video: File, salida: File, mision: String, i: Int, n: Int): Result<Resumen> {
         _estado.value = _estado.value.copy(video = i + 1, nombreVideo = video.name)
         val log = File(EventLog.dir.apply { mkdirs() }, "preproceso-${LocalDate.now()}.log")
         val p = PreprocessModule.proceso(modulo, video, salida, mision)
@@ -175,5 +182,5 @@ object Preprocesamiento {
 
     /** Cuántas imágenes finales ya hay en la carpeta de resultados de una salida (de todos sus videos). */
     fun imagenesListas(resultados: File): Int =
-        resultados.listFiles()?.sumOf { File(it, "imagenes_procesadas").listFiles { f -> f.extension.equals("jpg", true) }?.size ?: 0 } ?: 0
+        resultados.listFiles()?.sumOf { File(it, CORREGIDAS).listFiles { f -> f.extension.equals("jpg", true) }?.size ?: 0 } ?: 0
 }

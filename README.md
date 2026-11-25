@@ -136,14 +136,38 @@ internet ni servidor**; sigue aunque se cambie de pestaña y se puede cancelar. 
   su repositorio para que el `pull` no choque.
 - **Pendiente:** que las imágenes lleven GPS (el módulo hoy no sabe dónde estaba el dron; la PC tiene `registro.csv` y la hora de inicio del video en `salida.json`).
 
+### Ortomosaicos
+
+El menú **Ortomosaicos** tiene dos pestañas. **Creados** (la de entrada) es la biblioteca: a la izquierda los lotes y a la derecha el
+historial del elegido, del más reciente al más antiguo, para ver cómo cambia el cultivo; de cada fecha se puede **ver** (zoom,
+desplazamiento y el contorno del lote encima), **abrir su carpeta** o **eliminar** (con confirmación), y con dos o más fechas se pueden
+**comparar** (cortina o transparencia). **Crear** lista los vuelos recibidos y en qué punto está cada uno: se eligen las salidas, los ajustes
+y una revisión previa dice si se puede armar y, si no, por qué y qué hacer. Desde Procesamiento, al terminar de preprocesar aparece
+**Crear ortomosaico →**, que llega a Crear con ese vuelo ya elegido.
+
+- **Armado:** lo hace el módulo de Python [`ortomosaico/`](./ortomosaico) (de este repositorio), que la app ejecuta por detrás, en esta PC. Coloca
+  cada imagen donde el GPS dice que estaba el dron, la ajusta con las vecinas por puntos en común, alinea cada fecha con la primera del lote
+  y escribe un GeoTIFF georreferenciado, las **teselas para la IA** (cuadrícula fija por lote, contrato en [`docs/IA_ORTOMOSAICOS.md`](./docs/IA_ORTOMOSAICOS.md)), una vista para el visor y su
+  miniatura. **La precisión absoluta es la del GPS (unos 3 m)**: se corrige la coherencia entre imágenes y entre fechas, no la posición contra el
+  mapa. **Solo se probó con vuelos sintéticos**; con un vuelo real falta validarlo (lista en [`ortomosaico/README.md`](./ortomosaico/README.md)).
+  Mientras se arma se ve el avance (con **Cancelar**) en las dos pestañas, y un armado que falla o se cancela no estropea el ortomosaico que
+  el vuelo ya tenía.
+- **Programando (una vez en cada PC):** `./gradlew prepararOrtomosaico` (Python 3.12) crea `ortomosaico/venv`. En el instalador,
+  `empaquetarOrtomosaico` lo convierte en `agroscan-ortomosaico.exe`, sin que quien instala necesite Python. Sin ese entorno, **Armar** aparece
+  apagado y dice qué hacer.
+- **Dónde se guarda:** `Documentos\AgroScan\ortomosaicos\<lote>_<id>\<AAAA-MM-DD>_<id vuelo>\` (aparte de `vuelos\`, así borrar videos no
+  borra el historial). Los archivos son la fuente de verdad (`ortomosaico.json`, `vista.jpg`, `miniatura.jpg`…); la tabla `ortomosaico` de la
+  base solo los indexa. Detalle, flujo y criterios de usabilidad en [`docs/ORTOMOSAICOS.md`](./docs/ORTOMOSAICOS.md).
+- **Base de datos:** si ya tienes la base creada, aplica una vez `database/002_ortomosaico.sql` (ver [`docs/BASE_DE_DATOS.md`](./docs/BASE_DE_DATOS.md)).
+
 ### Estructura de la app de escritorio
 
 `desktopApp/src/main/kotlin/org/agroscan/project/`:
 
 | Carpeta | Contiene |
 |---|---|
-| `core/` | Solo infraestructura compartida: la conexión a la base (`Database.kt`; cambiar de base no toca las consultas), la carpeta de datos (`DataFolder.kt`), el registro de eventos (`EventLog.kt`) y el lector de JSON (`MiniJson.kt`) |
-| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad: `login`, `home`, `telemetry` (telemetría en vivo y medida de la señal), `flightlog` (registros de vuelo e importación de videos), `camera` (vista previa de la cámara), `preproceso` (ejecuta el módulo de preprocesamiento), `sync` (guarda en la base el historial del teléfono: lotes, misiones, vuelos), `redlocal` (zona móvil y Firewall) |
+| `core/` | Solo infraestructura compartida: la conexión a la base (`Database.kt`; cambiar de base no toca las consultas), la carpeta de datos (`DataFolder.kt`), la pantalla activa (`Navegacion.kt`, para que una pantalla lleve a otra), el registro de eventos (`EventLog.kt`) y el lector de JSON (`MiniJson.kt`) |
+| `features/<funcionalidad>/` | Lógica y consultas de cada funcionalidad: `login`, `home`, `telemetry` (telemetría en vivo y medida de la señal), `flightlog` (registros de vuelo e importación de videos), `camera` (vista previa de la cámara), `preproceso` (ejecuta el módulo de preprocesamiento), `ortomosaico` (biblioteca, historial, revisión previa, comparación y armado: ejecuta el módulo `ortomosaico/`), `sync` (guarda en la base el historial del teléfono: lotes, misiones, vuelos), `redlocal` (zona móvil y Firewall) |
 | `ui/` | Solo diseño (Compose): llama a `features`, nunca a SQL directamente |
 
 ### Running the apps
